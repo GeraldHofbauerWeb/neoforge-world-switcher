@@ -242,6 +242,8 @@ public final class WscCommand {
         topic(source, "players", "player", "teleport someone, move their stored state between worlds");
         topic(source, "groups", "group", "which worlds share one inventory");
         topic(source, "config", "config", "modded player data, command hooks");
+        source.sendSuccess(() -> Messages.info("  confirm / cancel — answer a pending confirmation "
+                + "(the [Confirm] and [Cancel] buttons run these)"), false);
         source.sendSuccess(() -> Messages.info("Players switch worlds with /ws <world>."), false);
         return 1;
     }
@@ -297,6 +299,7 @@ public final class WscCommand {
             case "config" -> {
                 source.sendSuccess(() -> Messages.highlight("/wsc config <action>:"), false);
                 line(source, "playerdata [status]", "which modded player data is per world");
+                line(source, "playerdata list", "the keys currently configured, and their mode");
                 line(source, "playerdata scan", "everything found, with mod names and descriptions");
                 line(source, "playerdata set <key> <true|false>", "per world (true) or global (false)");
                 line(source, "playerdata write/reload", "regenerate or re-read the config file");
