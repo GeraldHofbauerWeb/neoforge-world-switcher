@@ -19,15 +19,32 @@ accept.
 
 - **`/ws <world>`** — switch worlds instantly, no server restart. Bare `/ws` lists all worlds
   (clickable). `default` is the vanilla world group (overworld/nether/end) and is always available.
-- **`/wsc`** — full world management for operators: `create <name> [seed]`,
-  `import <folder> [as <name>]`, `rename`, `load`, `unload`, `tp <player> <world>`, `info`,
-  `delete` (with confirmation).
+- **`/wsc`** — world management for operators, grouped by what it acts on: `world`
+  (`create`, `import`, `rename`, `load`, `unload`, `info`, `delete`, `gamerule`, `difficulty`,
+  `gamemode`, `access`), `player` (`tp`, `state …`), `group` and `config`. Every pre-1.5.0
+  command still works as a deprecated alias.
 - **Per-player, per-world player state** (optional, on by default): inventory, ender chest, XP,
   health, hunger, effects, game mode and last position are kept separately for every world. The
   vanilla dimensions (overworld/nether/end) count as one group.
-- **Modded player state per world**, dependency-free: NeoForge data attachments (e.g. the whole
-  **Curios** inventory), persistent player NBT (`NeoForgeData`, used by Waystones/Quark, …) and
-  **Tough As Nails** thirst/temperature are all swapped per world.
+- **Modded player state per world**, dependency-free, and configurable **per key**: a generated,
+  commented `serverconfig/worldswitcher-playerdata.toml` lists everything found on your server —
+  NeoForge data attachments (e.g. the whole **Curios** inventory), persistent player NBT
+  (`NeoForgeData`, used by Waystones/Quark, …), **Tough As Nails** thirst/temperature, and mods
+  that keep their own storage such as **Cosmetic Armor Reworked** — each with the owning mod, a
+  description, and a simple `true` (per world) / `false` (global). Inspect and change it live with
+  `/wsc config playerdata scan` and `… set <key> <true|false>`.
+- **World groups**: put any set of worlds into one inventory group and they share a single player
+  state — the honest way to keep worlds in sync. `/wsc group set <world> <group>`. The group
+  `default` is the vanilla dimensions, so putting a world there means players keep their main
+  items (the old `shareinventory` behaviour, still available as an alias).
+- **Move a player's state between worlds**: `/wsc player state show|copy|move|swap|clear`, offline
+  players included. Position never travels; everything else does, modded state and all.
+- **Per-world game mode**: a world can hand out a mode as a *default* that seeds a player's first
+  visit, or *forced*, re-applied on every entry — the difference between "this is the creative
+  world" and "nobody leaves adventure mode here". `/wsc world gamemode <world> <mode> [forced]`.
+- **Restricted worlds**: give a world a minimum permission level with
+  `/wsc world access <world> <0-4>`. Enforced for `/ws`, for portals leading into it and at login;
+  restricted worlds also disappear from tab completion for players who cannot enter them.
 - **Per-world game rules, time, weather & difficulty**: each managed world keeps its own clock,
   weather, rules and difficulty. `/gamerule`, `/time`, `/weather` and `/difficulty` are
   context-sensitive; freeze time or keep eternal night per world, and sleeping only skips your own
@@ -37,10 +54,8 @@ accept.
   switches world). Define them globally and per world in
   `serverconfig/worldswitcher-hooks.json`, with `{{worldName}}`, `{{worldId}}`, `{{playerName}}`
   and `{{playerUuid}}` variables and per-hook run-as (`server`/`player`). Live-reload with
-  `/wsc hooks reload`. Perfect for pausing `doDaylightCycle`/`doWeatherCycle` (or Serene Seasons'
-  `doSeasonCycle`) while a world is empty.
-- **Shared inventory worlds** (`/wsc shareinventory <world> true`): mark a world "keep-inventory"
-  so it uses the `default` inventory group instead of its own.
+  `/wsc config hooks reload`. Perfect for pausing `doDaylightCycle`/`doWeatherCycle` (or Serene
+  Seasons' `doSeasonCycle`) while a world is empty.
 - **Clickable switch announcements**: when someone switches world, everyone else sees a chat
   message whose world name is a clickable `/ws <world>` link to follow along.
 - **World import done right**: copies only the overworld data, reads seed & spawn from the source
@@ -65,8 +80,9 @@ See `world/serverconfig/worldswitcher-server.toml`, e.g. `separateInventories` (
 `wsPermissionLevel` (`0` = everyone may use `/ws`), `worldsFolder` (import folder, default
 `worlds`), `autoLoadOnStartup`, `restoreLastPosition`, `handlePortalGroupChanges`,
 `perWorldGameRules`, `perWorldTimeAndWeather`, `perWorldDifficulty`, `announceSwitches` and
-`enableCommandHooks` / `hookDefaultRunAs`. Command hooks live in a separate
-`world/serverconfig/worldswitcher-hooks.json`.
+`enableCommandHooks` / `hookDefaultRunAs`. Two generated files sit next to it:
+`worldswitcher-hooks.json` for the command hooks, and `worldswitcher-playerdata.toml` for the
+per-key decisions about which modded player data is per world and which is global.
 
 ## Notes
 
