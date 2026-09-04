@@ -5,7 +5,7 @@ Guidance for AI assistants (Claude / Junie) working on this repository.
 ## ⚠️ When you take over, always
 
 - **Track your work in the GitHub issue tracker.** Before starting a task, check for a
-  matching issue at <https://github.com/Gerry3010/neoforge-world-switcher/issues> (create
+  matching issue at <https://github.com/GeraldHofbauerWeb/neoforge-world-switcher/issues> (create
   one if it's missing), and reference/close it when the work is done. Every non-trivial
   change should be traceable to an issue.
 - **Keep the changelogs up to date.** Any user-facing change must be recorded in:
@@ -27,7 +27,7 @@ Guidance for AI assistants (Claude / Junie) working on this repository.
 - **Group:** `net.geraldhofbauer.worldswitcher` · **License:** MIT · **Author:** Gerald Hofbauer
 - **Loader / MC:** NeoForge `21.0.167`, Minecraft `1.21.1` (range `[1.21,1.21.1]`).
 - **Current version:** `1.5.0` (see `mod_version` in `gradle.properties`).
-- **Repo:** <https://github.com/Gerry3010/neoforge-world-switcher> (branch `main`).
+- **Repo:** <https://github.com/GeraldHofbauerWeb/neoforge-world-switcher> (branch `main`).
 - Vanilla 1.21.1 clients can join without the mod (client unsupported / server required).
 
 ## Build & test
@@ -55,11 +55,12 @@ gameplay flows — validation is manual (via `test-server/`, NeoForge 1.21.1).
    - Environment: server `required`, client `unsupported`.
    - Project body = `modrinth/description.md`; version changelog = `modrinth/changelog-<version>.md`.
 
-## Deployment (customer's server)
+## Deployment (Gerald's own server)
 
 - SSH: `gerry@82.165.95.152` (user is in the `docker` group; runs AMP instances).
-- **Sebs Modpack v4** = AMP instance `AMP_SebsModpackv401`, world save `survival_world`,
-  mods folder `/AMP/Minecraft/mods/` (files owned by `amp:amp`). Restart via `docker restart`.
+- **Sebs Modpack v4** (Gerald's own server, played with friends) = AMP instance
+  `AMP_SebsModpackv401`, world save `survival_world`, mods folder `/AMP/Minecraft/mods/`
+  (files owned by `amp:amp`). Restart via `docker restart`.
 - Always **delete the old `worldswitcher-*.jar`** before copying the new one in.
 - ⚠️ Leave the v3 instance `AMP_SebsModpackv302` untouched unless explicitly asked.
 
@@ -71,7 +72,7 @@ gameplay flows — validation is manual (via `test-server/`, NeoForge 1.21.1).
   is per world (`true`) and which is global (`false`). Written from `PlayerDataCatalog`, which
   enumerates the attachment registry, observes persistent-NBT keys and lists the registered
   bridges. Never hand-author it from scratch: `/wsc config playerdata write` regenerates it,
-  keeping existing choices. On the customer server:
+  keeping existing choices. On the live server:
   `/AMP/Minecraft/survival_world/serverconfig/worldswitcher-playerdata.toml`.
 
 ## Adding support for a mod that stores player data itself
@@ -91,7 +92,8 @@ config explains it.
 - Variables: `{{worldName}}`, `{{worldId}}`, `{{playerName}}`, `{{playerUuid}}`.
 - `as: server` (OP 4, output suppressed, positioned at the world) or `as: player`; default
   from `hookDefaultRunAs`. Global hooks run before per-world hooks. Master toggle
-  `enableCommandHooks`. Live reload/inspect via `/wsc config hooks reload` and `/wsc config hooks status`.
+  `enableCommandHooks`. Live reload/inspect via `/wsc config hooks reload` and
+  `/wsc config hooks status`.
 - See `README.md` for full docs and ready-made examples (e.g. pausing
   `doDaylightCycle`/`doWeatherCycle`/`doSeasonCycle` while a world is empty).
 

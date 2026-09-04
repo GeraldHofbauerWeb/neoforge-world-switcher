@@ -49,7 +49,7 @@ jobs:
             echo "3. Make sure the server runs NeoForge for Minecraft 1.21.1"
             echo ""
             echo "### 🔧 Configuration"
-            echo "See the [README](https://github.com/Gerry3010/neoforge-world-switcher/blob/main/README.md)"
+            echo "See the [README](https://github.com/GeraldHofbauerWeb/neoforge-world-switcher/blob/main/README.md)"
             echo "EOF"
           } >> $GITHUB_ENV
 

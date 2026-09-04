@@ -83,4 +83,4 @@ fixes. While the AI provided technical assistance, all creative decisions, featu
 project direction came from human input. We believe this transparency about AI usage is important
 for the open-source community.
 
-Full documentation on [GitHub](https://github.com/Gerry3010/neoforge-world-switcher).
+Full documentation on [GitHub](https://github.com/GeraldHofbauerWeb/neoforge-world-switcher).
