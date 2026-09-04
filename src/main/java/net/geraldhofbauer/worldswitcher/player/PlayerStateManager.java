@@ -402,13 +402,42 @@ public final class PlayerStateManager {
      * per-world state there is no remembered mode a default could seed.</p>
      */
     public static void applyWorldGameMode(ServerPlayer player, ServerLevel level) {
+        // Deferred to the end of the tick on purpose. A world switch restores the stored per-world
+        // state — including the remembered game mode — across several handlers that run at
+        // different points of the same tick, and a forced mode has to be the last word no matter
+        // which of them ran last. Applying it inline wins against some of them and loses against
+        // others; running after the tick's work wins against all of them, at the cost of the mode
+        // settling one tick late.
+        player.server.execute(() -> {
+            if (!player.hasDisconnected()) {
+                applyWorldGameModeNow(player, level);
+            }
+        });
+    }
+
+    private static void applyWorldGameModeNow(ServerPlayer player, ServerLevel level) {
         MinecraftServer server = player.server;
-        WorldRegistry.WorldEntry entry = WorldRegistry.get(server)
-                .byId(WorldRegistry.groupOf(level.dimension()));
-        if (entry == null || entry.defaultGameMode() == null) {
+        WorldRegistry registry = WorldRegistry.get(server);
+        String worldGroup = WorldRegistry.groupOf(level.dimension());
+
+        // The vanilla dimensions have no WorldEntry, so their policy lives on the registry itself.
+        net.minecraft.world.level.GameType mode;
+        boolean forced;
+        if (WorldRegistry.DEFAULT_GROUP.equals(worldGroup)) {
+            mode = registry.defaultGroupGameMode();
+            forced = registry.defaultGroupForceGameMode();
+        } else {
+            WorldRegistry.WorldEntry entry = registry.byId(worldGroup);
+            if (entry == null) {
+                return;
+            }
+            mode = entry.defaultGameMode();
+            forced = entry.forceGameMode();
+        }
+        if (mode == null) {
             return;
         }
-        if (!entry.forceGameMode()) {
+        if (!forced) {
             if (!Config.separateInventories()) {
                 return;
             }
@@ -417,7 +446,7 @@ public final class PlayerStateManager {
                 return; // been here before — their remembered mode wins
             }
         }
-        player.setGameMode(entry.defaultGameMode());
+        player.setGameMode(mode);
     }
 
     /** Switches a player to another world group, swapping player state if configured. */

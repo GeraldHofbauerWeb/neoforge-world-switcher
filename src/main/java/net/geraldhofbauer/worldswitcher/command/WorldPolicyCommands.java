@@ -40,7 +40,7 @@ public final class WorldPolicyCommands {
 
     public static LiteralArgumentBuilder<CommandSourceStack> buildGameModeNode() {
         var worldArg = Commands.argument("world", StringArgumentType.word())
-                .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                .suggests(WorldSuggestions.SWITCH_TARGETS)
                 .executes(WorldPolicyCommands::queryGameMode);
         worldArg.then(Commands.literal("none")
                 .executes(context -> setGameMode(context, null, false)));
@@ -54,34 +54,50 @@ public final class WorldPolicyCommands {
     }
 
     private static int queryGameMode(CommandContext<CommandSourceStack> context) {
+        CommandSourceStack source = context.getSource();
+        String name = StringArgumentType.getString(context, "world");
+        if (WorldRegistry.isDefaultGroup(name)) {
+            WorldRegistry registry = WorldRegistry.get(source.getServer());
+            source.sendSuccess(() -> Messages.info("World '" + WorldRegistry.DEFAULT_GROUP
+                    + "' game mode: " + describe(registry.defaultGroupGameMode(),
+                            registry.defaultGroupForceGameMode())), false);
+            return 1;
+        }
         WorldRegistry.WorldEntry entry = resolve(context);
         if (entry == null) {
             return 0;
         }
-        context.getSource().sendSuccess(() -> Messages.info("World '" + entry.name() + "' game mode: "
+        source.sendSuccess(() -> Messages.info("World '" + entry.name() + "' game mode: "
                 + describeGameMode(entry)), false);
         return 1;
     }
 
     /** One line for {@code /wsc world info} and the query form. */
     public static String describeGameMode(WorldRegistry.WorldEntry entry) {
-        GameType mode = entry.defaultGameMode();
+        return describe(entry.defaultGameMode(), entry.forceGameMode());
+    }
+
+    /** Same, for a policy that does not belong to a {@link WorldRegistry.WorldEntry}. */
+    public static String describe(@Nullable GameType mode, boolean forced) {
         if (mode == null) {
             return "not set (players keep their own)";
         }
-        return entry.forceGameMode()
+        return forced
                 ? mode.getName() + " (forced on every entry)"
                 : mode.getName() + " (default on the first visit only)";
     }
 
     private static int setGameMode(CommandContext<CommandSourceStack> context, @Nullable GameType mode,
                                    boolean forced) {
+        CommandSourceStack source = context.getSource();
+        MinecraftServer server = source.getServer();
+        if (WorldRegistry.isDefaultGroup(StringArgumentType.getString(context, "world"))) {
+            return setDefaultGroupGameMode(source, server, mode, forced);
+        }
         WorldRegistry.WorldEntry entry = resolve(context);
         if (entry == null) {
             return 0;
         }
-        CommandSourceStack source = context.getSource();
-        MinecraftServer server = source.getServer();
         WorldRegistry.get(server).setGameMode(entry.id(), mode, forced);
 
         if (mode == null) {
@@ -110,6 +126,39 @@ public final class WorldPolicyCommands {
         return 1;
     }
 
+    /**
+     * The {@value WorldRegistry#DEFAULT_GROUP} group covers every vanilla dimension, so "players
+     * currently there" means everyone in the overworld, nether or end.
+     */
+    private static int setDefaultGroupGameMode(CommandSourceStack source, MinecraftServer server,
+                                               @Nullable GameType mode, boolean forced) {
+        WorldRegistry registry = WorldRegistry.get(server);
+        registry.setDefaultGroupGameMode(mode, forced);
+        if (mode == null) {
+            source.sendSuccess(() -> Messages.success("World ")
+                    .append(Messages.highlight(WorldRegistry.DEFAULT_GROUP))
+                    .append(Messages.info(" no longer sets a game mode.")), true);
+            return 1;
+        }
+        int changed = 0;
+        if (forced) {
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                if (WorldRegistry.DEFAULT_GROUP.equals(
+                        WorldRegistry.groupOf(player.level().dimension()))) {
+                    PlayerStateManager.applyWorldGameMode(player, player.serverLevel());
+                    changed++;
+                }
+            }
+        }
+        int affected = changed;
+        source.sendSuccess(() -> Messages.success("World ")
+                .append(Messages.highlight(WorldRegistry.DEFAULT_GROUP))
+                .append(Messages.info(" game mode: " + describe(mode, forced)
+                        + (forced ? " — applied to " + affected + " player(s) currently there" : "")))
+                , true);
+        return 1;
+    }
+
     // ------------------------------------------------------------------ /wsc world access
 
     public static LiteralArgumentBuilder<CommandSourceStack> buildAccessNode() {
@@ -122,6 +171,9 @@ public final class WorldPolicyCommands {
     }
 
     private static int queryAccess(CommandContext<CommandSourceStack> context) {
+        if (rejectDefaultGroup(context, "restricted")) {
+            return 0;
+        }
         WorldRegistry.WorldEntry entry = resolve(context);
         if (entry == null) {
             return 0;
@@ -138,6 +190,9 @@ public final class WorldPolicyCommands {
     }
 
     private static int setAccess(CommandContext<CommandSourceStack> context) {
+        if (rejectDefaultGroup(context, "restricted")) {
+            return 0;
+        }
         WorldRegistry.WorldEntry entry = resolve(context);
         if (entry == null) {
             return 0;
@@ -197,6 +252,20 @@ public final class WorldPolicyCommands {
             }
         }
         return found;
+    }
+
+    /**
+     * The default group is where players are sent when a world turns them away, so it must stay
+     * reachable — there is nowhere to fall back to. Says so instead of "Unknown world: default".
+     */
+    private static boolean rejectDefaultGroup(CommandContext<CommandSourceStack> context, String what) {
+        if (!WorldRegistry.isDefaultGroup(StringArgumentType.getString(context, "world"))) {
+            return false;
+        }
+        context.getSource().sendFailure(Messages.error("The '" + WorldRegistry.DEFAULT_GROUP
+                + "' world cannot be " + what + " — it is where players are sent when another world "
+                + "turns them away, so it has to stay reachable."));
+        return true;
     }
 
     @Nullable

@@ -211,9 +211,19 @@ public final class GroupCommands {
         });
     }
 
+    /**
+     * {@code default} names a group, not a world, so it can never be the thing being moved — only
+     * the destination. Says that instead of "Unknown world: default".
+     */
     @Nullable
     private static WorldRegistry.WorldEntry resolve(CommandContext<CommandSourceStack> context) {
         String name = StringArgumentType.getString(context, "world");
+        if (WorldRegistry.isDefaultGroup(name)) {
+            context.getSource().sendFailure(Messages.error("'" + WorldRegistry.DEFAULT_GROUP
+                    + "' is a group, not a world — it is the group the vanilla dimensions belong to. "
+                    + "Use it as the target: /wsc group set <world> " + WorldRegistry.DEFAULT_GROUP));
+            return null;
+        }
         WorldRegistry.WorldEntry entry = WorldRegistry.get(context.getSource().getServer()).byName(name);
         if (entry == null) {
             context.getSource().sendFailure(Messages.error("Unknown world: " + name));

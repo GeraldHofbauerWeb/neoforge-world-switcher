@@ -343,9 +343,31 @@ public final class GameRuleHelper {
         return 0;
     }
 
+    /**
+     * {@code /wsc world difficulty default <value>} — the vanilla dimensions share the server's own
+     * difficulty, so this is plain {@code /difficulty}, just callable from any world.
+     */
+    private static int setVanillaDifficulty(CommandSourceStack source, Difficulty difficulty) {
+        MinecraftServer server = source.getServer();
+        if (server.getWorldData().getDifficulty() == difficulty) {
+            source.sendFailure(Component.translatable("commands.difficulty.failure", difficulty.getKey()));
+            return 0;
+        }
+        server.setDifficulty(difficulty, true);
+        source.sendSuccess(() -> Component.translatable("commands.difficulty.success",
+                difficulty.getDisplayName())
+                .append(Messages.info(" (world '" + WorldRegistry.DEFAULT_GROUP + "')")), true);
+        return 1;
+    }
+
     private static int setWorldDifficulty(CommandSourceStack source, ServerLevel level, Difficulty difficulty) {
         PerWorldLevelData data = level instanceof DynamicServerLevel dynamic ? dynamic.perWorldData() : null;
-        if (data == null || !data.ownDifficulty()) {
+        if (data == null) {
+            // The vanilla group has no per-world data — its difficulty IS the server difficulty,
+            // so set that, exactly like plain /difficulty does.
+            return setVanillaDifficulty(source, difficulty);
+        }
+        if (!data.ownDifficulty()) {
             source.sendFailure(Messages.error("perWorldDifficulty is disabled in the server config."));
             return 0;
         }
@@ -384,7 +406,7 @@ public final class GameRuleHelper {
     public static LiteralArgumentBuilder<CommandSourceStack> buildWscDifficultyNode() {
         RequiredArgumentBuilder<CommandSourceStack, String> worldArg =
                 Commands.argument("world", StringArgumentType.word())
-                        .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                        .suggests(WorldSuggestions.SWITCH_TARGETS)
                         .executes(context -> {
                             ServerLevel level = resolveWorldLevel(context);
                             if (level == null) {
@@ -406,11 +428,18 @@ public final class GameRuleHelper {
         return Commands.literal("difficulty").then(worldArg);
     }
 
-    /** Resolves the "world" argument to a loaded managed level (no feature-config check). */
+    /**
+     * Resolves the "world" argument to a loaded managed level (no feature-config check).
+     * {@code default} targets the vanilla group, i.e. the overworld — so a world's difficulty can
+     * be set from anywhere, not only while standing in it.
+     */
     @Nullable
     private static ServerLevel resolveWorldLevel(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         String name = StringArgumentType.getString(context, "world");
+        if (WorldRegistry.isDefaultGroup(name)) {
+            return source.getServer().overworld();
+        }
         WorldRegistry.WorldEntry entry = WorldRegistry.get(source.getServer()).byName(name);
         if (entry == null) {
             source.sendFailure(Messages.error("Unknown world: " + name));
@@ -433,7 +462,7 @@ public final class GameRuleHelper {
     public static LiteralArgumentBuilder<CommandSourceStack> buildWscGameruleNode() {
         RequiredArgumentBuilder<CommandSourceStack, String> worldArg =
                 Commands.argument("world", StringArgumentType.word())
-                        .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                        .suggests(WorldSuggestions.SWITCH_TARGETS)
                         .executes(GameRuleHelper::listWorldRules);
         GameRules.visitGameRuleTypes(new GameRules.GameRuleTypeVisitor() {
             @Override
@@ -451,10 +480,13 @@ public final class GameRuleHelper {
     private static ServerLevel resolveWorldTarget(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         String name = StringArgumentType.getString(context, "world");
+        if (WorldRegistry.isDefaultGroup(name)) {
+            // The vanilla group always uses the vanilla rules, so perWorldGameRules does not apply.
+            return source.getServer().overworld();
+        }
         WorldRegistry.WorldEntry entry = WorldRegistry.get(source.getServer()).byName(name);
         if (entry == null) {
-            source.sendFailure(Messages.error("Unknown world: " + name
-                    + " (for the default world use plain /gamerule)"));
+            source.sendFailure(Messages.error("Unknown world: " + name));
             return null;
         }
         if (!Config.perWorldGameRules()) {

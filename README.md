@@ -47,6 +47,10 @@ group (overworld/nether/end) and always available. Tab completion lists all worl
 | `gamemode <world> [none\|<mode> [forced]]` | The game mode this world hands out; without a value, shows the current setting |
 | `access <world> [0-4]` | Minimum permission level to enter; without a value, shows the current setting |
 
+`default` — the vanilla group (overworld/nether/end) — is a valid target for `info`, `gamemode`,
+`gamerule` and `difficulty`. It is **not** a managed world, so it cannot be renamed, loaded,
+unloaded, deleted, restricted with `access`, or moved between groups; those say so explicitly.
+
 **`/wsc player`** — one player at a time:
 
 | Action | Description |
@@ -135,6 +139,9 @@ next time they enter.
 Without a per-world player state (`separateInventories = false`) there is no remembered mode for a
 default to seed, so only `forced` has an effect there — the command says so when you set one.
 
+`/wsc world gamemode default <mode>` works too and covers the vanilla dimensions. They have no
+world entry of their own, so that policy is stored on the registry rather than on a world.
+
 ### Restricting who may enter a world
 
 Each world has a minimum permission level, `0` by default (everyone):
@@ -149,6 +156,9 @@ It is enforced in three places: `/ws`, portals that lead into the world, and log
 logs out in a world that has since been restricted is moved to the default world with their default
 state, the same way an unloaded world is reconciled. Restricted worlds also disappear from `/ws`
 tab completion and from the bare `/ws` list for players who cannot enter them.
+
+The `default` world cannot be restricted: it is where players are sent when another world turns
+them away, so it has to stay reachable. The command refuses with that reason.
 
 `/wsc player tp <player> <world>` deliberately **bypasses** the check: it is already OP-gated, and
 moving someone into a restricted world is an explicit admin decision. Setting a level while players

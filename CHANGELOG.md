@@ -4,6 +4,29 @@ All notable changes to World Switcher will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-09-04
+### Fixed
+- **`default` wird in `/wsc world …` akzeptiert, wo es sinnvoll ist.** `default` ist der Name der
+  Vanilla-Gruppe (Overworld/Nether/End) und hat keinen `WorldEntry` — `/wsc world gamemode default
+  creative` und `/wsc world info default` scheiterten deshalb an `Unknown world: default`, während
+  `/ws default` und `/wsc player state … default` längst funktionierten. Jetzt einheitlich:
+  - `world gamemode default <modus> [forced]` und `world info default` funktionieren. Die
+    Gamemode-Policy der Default-Gruppe liegt in der `WorldRegistry` selbst, da es keinen
+    `WorldEntry` gibt, in den sie passen würde.
+  - `world gamerule default …` und `world difficulty default …` zielen auf die Overworld — damit
+    lassen sie sich auch aus einer anderen Welt heraus setzen, nicht nur vor Ort.
+  - `world access default` wird bewusst **abgelehnt**, mit Begründung: die Default-Welt ist das
+    Ziel, in das gesperrte Spieler geschickt werden, sie muss erreichbar bleiben.
+  - `world rename|load|unload|delete default` und `group set|unset default` nennen jetzt den
+    echten Grund statt `Unknown world: default`.
+- **Erzwungene Gamemodes greifen jetzt zuverlässig beim Weltwechsel.** Ein Weltwechsel stellt den
+  gespeicherten Zustand — inklusive des gemerkten Gamemodes — über mehrere Handler innerhalb
+  desselben Ticks wieder her. Die Policy wurde bisher mittendrin angewendet und konnte danach
+  wieder überschrieben werden. Sie läuft jetzt am Tick-Ende und hat damit das letzte Wort,
+  unabhängig davon, welcher Handler zuletzt lief; der Modus steht einen Tick später fest.
+- `/wsc help` listet `config playerdata list` sowie `confirm`/`cancel` — beide waren dokumentiert
+  und tab-vervollständigbar, fehlten aber in der Hilfe, die Spieler tatsächlich sehen.
+
 ## [1.5.0] - 2026-09-04
 ### Added
 - **Konfigurierbare modded Player-Daten** — statt jeden Mod einzeln zu unterstützen, gibt es jetzt

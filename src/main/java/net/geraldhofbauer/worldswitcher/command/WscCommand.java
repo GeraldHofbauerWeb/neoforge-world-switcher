@@ -117,7 +117,7 @@ public final class WscCommand {
                         .executes(WscCommand::executeList))
                 .then(Commands.literal("info")
                         .then(Commands.argument("world", StringArgumentType.word())
-                                .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                                .suggests(WorldSuggestions.SWITCH_TARGETS)
                                 .executes(WscCommand::executeInfo)))
                 .then(Commands.literal("create")
                         .then(Commands.argument("name", StringArgumentType.word())
@@ -346,8 +346,21 @@ public final class WscCommand {
         return 1;
     }
 
+    /**
+     * Resolves the "world" argument to a managed world. {@code default} is the vanilla group, which
+     * World Switcher does not own — it gets its own message rather than "Unknown world: default",
+     * because the name is valid everywhere else ({@code /ws}, {@code /wsc world info}, …).
+     */
     private static WorldRegistry.WorldEntry resolveWorld(CommandContext<CommandSourceStack> context) {
         String name = StringArgumentType.getString(context, "world");
+        if (WorldRegistry.isDefaultGroup(name)) {
+            context.getSource().sendFailure(Messages.error("'" + WorldRegistry.DEFAULT_GROUP
+                    + "' is the vanilla world (overworld/nether/end), not a managed world — it "
+                    + "cannot be renamed, loaded, unloaded or deleted. Try ")
+                    .append(Messages.runCommand("/wsc world info default", "/wsc world info default",
+                            ChatFormatting.YELLOW)));
+            return null;
+        }
         WorldRegistry.WorldEntry entry = WorldRegistry.get(context.getSource().getServer()).byName(name);
         if (entry == null) {
             context.getSource().sendFailure(Messages.error("Unknown world: " + name));
@@ -418,6 +431,9 @@ public final class WscCommand {
     }
 
     private static int executeInfo(CommandContext<CommandSourceStack> context) {
+        if (WorldRegistry.isDefaultGroup(StringArgumentType.getString(context, "world"))) {
+            return executeInfoDefault(context.getSource());
+        }
         WorldRegistry.WorldEntry entry = resolveWorld(context);
         if (entry == null) {
             return 0;
@@ -450,6 +466,47 @@ public final class WscCommand {
         if (!entry.sourcePath().isEmpty()) {
             source.sendSuccess(() -> Messages.info("  imported from: " + entry.sourcePath()), false);
         }
+        return 1;
+    }
+
+    /**
+     * {@code /wsc world info default} — the vanilla dimensions have no WorldEntry, so this reports
+     * what actually applies to them: the overworld's seed and spawn, everyone across all three
+     * dimensions, and the group's game-mode policy.
+     */
+    private static int executeInfoDefault(CommandSourceStack source) {
+        MinecraftServer server = source.getServer();
+        WorldRegistry registry = WorldRegistry.get(server);
+        ServerLevel overworld = server.overworld();
+
+        int players = 0;
+        for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+            if (WorldRegistry.DEFAULT_GROUP.equals(WorldRegistry.groupOf(online.level().dimension()))) {
+                players++;
+            }
+        }
+        int playerCount = players;
+        java.util.List<String> shared = new java.util.ArrayList<>();
+        for (WorldRegistry.WorldEntry other : registry.entries()) {
+            if (other.sharesDefaultInventory()) {
+                shared.add(other.name());
+            }
+        }
+
+        source.sendSuccess(() -> Messages.highlight("World '" + WorldRegistry.DEFAULT_GROUP + "'"), false);
+        source.sendSuccess(() -> Messages.info("  the vanilla dimensions (overworld, nether, end) — "
+                + "not a managed world"), false);
+        source.sendSuccess(() -> Messages.info("  status: loaded, " + playerCount + " players"), false);
+        source.sendSuccess(() -> Messages.info("  seed: " + overworld.getSeed()), false);
+        source.sendSuccess(() -> Messages.info("  spawn: "
+                + overworld.getSharedSpawnPos().toShortString()), false);
+        source.sendSuccess(() -> Messages.info("  game mode: " + WorldPolicyCommands.describe(
+                registry.defaultGroupGameMode(), registry.defaultGroupForceGameMode())), false);
+        source.sendSuccess(() -> Messages.info("  access: open to everyone (cannot be restricted)"), false);
+        source.sendSuccess(() -> Messages.info("  inventory group: " + WorldRegistry.DEFAULT_GROUP
+                + (shared.isEmpty() ? "" : " — also used by " + String.join(", ", shared))), false);
+        source.sendSuccess(() -> Messages.info("  game rules, time, weather and difficulty are the "
+                + "vanilla ones; /gamerule and friends work here as usual"), false);
         return 1;
     }
 

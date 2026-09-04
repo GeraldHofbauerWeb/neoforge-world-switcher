@@ -36,6 +36,15 @@ public class WorldRegistry extends SavedData {
     /** id → entry, insertion-ordered for stable /wsc world list output. */
     private final Map<String, WorldEntry> entries = new LinkedHashMap<>();
 
+    /**
+     * Game-mode policy of the {@value #DEFAULT_GROUP} group. The vanilla dimensions have no
+     * {@link WorldEntry} — World Switcher does not own them — so their policy lives here instead of
+     * in the world list. Semantics are the same as {@link WorldEntry#defaultGameMode()}.
+     */
+    @Nullable
+    private net.minecraft.world.level.GameType defaultGroupGameMode;
+    private boolean defaultGroupForceGameMode;
+
     public static final class WorldEntry {
         private final String id;
         private String name;
@@ -282,6 +291,11 @@ public class WorldRegistry extends SavedData {
             entry.requiredPermissionLevel = entryTag.getInt("requiredPermissionLevel");
             registry.entries.put(entry.id(), entry);
         }
+        if (tag.contains("defaultGroupGameMode", Tag.TAG_STRING)) {
+            registry.defaultGroupGameMode = net.minecraft.world.level.GameType
+                    .byName(tag.getString("defaultGroupGameMode"), null);
+        }
+        registry.defaultGroupForceGameMode = tag.getBoolean("defaultGroupForceGameMode");
         return registry;
     }
 
@@ -326,6 +340,10 @@ public class WorldRegistry extends SavedData {
             list.add(entryTag);
         }
         tag.put("worlds", list);
+        if (defaultGroupGameMode != null) {
+            tag.putString("defaultGroupGameMode", defaultGroupGameMode.getName());
+        }
+        tag.putBoolean("defaultGroupForceGameMode", defaultGroupForceGameMode);
         return tag;
     }
 
@@ -424,6 +442,29 @@ public class WorldRegistry extends SavedData {
         entry.inventoryGroup = normalized;
         setDirty();
         return true;
+    }
+
+    /** Game mode the {@value #DEFAULT_GROUP} group hands out, or null when it has no opinion. */
+    @Nullable
+    public net.minecraft.world.level.GameType defaultGroupGameMode() {
+        return defaultGroupGameMode;
+    }
+
+    /** Whether the {@value #DEFAULT_GROUP} group's game mode is re-applied on every entry. */
+    public boolean defaultGroupForceGameMode() {
+        return defaultGroupForceGameMode;
+    }
+
+    /** Sets the {@value #DEFAULT_GROUP} group's game-mode policy; {@code null} clears it. */
+    public void setDefaultGroupGameMode(@Nullable net.minecraft.world.level.GameType mode, boolean forced) {
+        this.defaultGroupGameMode = mode;
+        this.defaultGroupForceGameMode = mode != null && forced;
+        setDirty();
+    }
+
+    /** True when a command argument names the vanilla group rather than a managed world. */
+    public static boolean isDefaultGroup(String name) {
+        return DEFAULT_GROUP.equalsIgnoreCase(name);
     }
 
     /**
