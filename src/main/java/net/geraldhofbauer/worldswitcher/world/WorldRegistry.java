@@ -33,7 +33,7 @@ public class WorldRegistry extends SavedData {
 
     private static final String DATA_NAME = "worldswitcher_worlds";
 
-    /** id → entry, insertion-ordered for stable /wsc list output. */
+    /** id → entry, insertion-ordered for stable /wsc world list output. */
     private final Map<String, WorldEntry> entries = new LinkedHashMap<>();
 
     public static final class WorldEntry {
@@ -60,11 +60,28 @@ public class WorldRegistry extends SavedData {
         @Nullable
         private net.minecraft.world.Difficulty difficulty;
         /**
-         * When true this world uses the {@value #DEFAULT_GROUP} inventory group instead of its own —
-         * players keep their default-world items here (no separate per-world inventory). Game rules,
-         * time, weather and difficulty stay per-world regardless.
+         * Inventory group this world belongs to; empty = its own {@link #id}. Worlds sharing a group
+         * share one per-player state ("auto-sync"). The reserved group {@value #DEFAULT_GROUP} is the
+         * vanilla dimensions' group — a world put there keeps the player's default-world items
+         * (what {@code shareDefaultInventory} meant before 1.5.0). Game rules, time, weather and
+         * difficulty stay per-world regardless of the group.
          */
-        private boolean shareDefaultInventory;
+        private String inventoryGroup = "";
+        /**
+         * Game mode this world hands out; null = it has no opinion (the player keeps whatever mode
+         * they had, which is what every world did before 1.6.0). Applied on the first visit of the
+         * world's inventory group, or on every entry when {@link #forceGameMode} is set.
+         */
+        @Nullable
+        private net.minecraft.world.level.GameType defaultGameMode;
+        /** Whether {@link #defaultGameMode} is re-applied on every entry, not just the first. */
+        private boolean forceGameMode;
+        /**
+         * Minimum permission level a player needs to enter this world; 0 = everyone. Checked for
+         * {@code /ws}, for portals that lead into the world and at login — but not for
+         * {@code /wsc player tp}, which is an admin action and deliberately bypasses it.
+         */
+        private int requiredPermissionLevel;
         /** Live level data while the world is loaded — the registry serializes from it. */
         @Nullable
         private PerWorldLevelData liveData;
@@ -148,9 +165,35 @@ public class WorldRegistry extends SavedData {
             return difficulty;
         }
 
+        /** The inventory group this world belongs to — its own id unless it was grouped elsewhere. */
+        public String inventoryGroup() {
+            return inventoryGroup.isEmpty() ? id : inventoryGroup;
+        }
+
+        /** True if this world was put into a group other than its own. */
+        public boolean grouped() {
+            return !inventoryGroup.isEmpty() && !inventoryGroup.equals(id);
+        }
+
+        /** The game mode this world hands out, or null when it has no opinion. */
+        @Nullable
+        public net.minecraft.world.level.GameType defaultGameMode() {
+            return defaultGameMode;
+        }
+
+        /** True when {@link #defaultGameMode()} is re-applied on every entry, not just the first. */
+        public boolean forceGameMode() {
+            return forceGameMode;
+        }
+
+        /** Minimum permission level needed to enter; 0 = everyone. */
+        public int requiredPermissionLevel() {
+            return requiredPermissionLevel;
+        }
+
         /** True if this world shares the {@value #DEFAULT_GROUP} inventory group (keep-inventory). */
         public boolean sharesDefaultInventory() {
-            return shareDefaultInventory;
+            return DEFAULT_GROUP.equals(inventoryGroup());
         }
 
         void attachLiveData(PerWorldLevelData data) {
@@ -225,7 +268,18 @@ public class WorldRegistry extends SavedData {
             if (entryTag.contains("difficulty")) {
                 entry.difficulty = net.minecraft.world.Difficulty.byName(entryTag.getString("difficulty"));
             }
-            entry.shareDefaultInventory = entryTag.getBoolean("shareDefaultInventory");
+            if (entryTag.contains("inventoryGroup", Tag.TAG_STRING)) {
+                entry.inventoryGroup = entryTag.getString("inventoryGroup");
+            } else if (entryTag.getBoolean("shareDefaultInventory")) {
+                // Pre-1.5.0 saves only knew "shares the default group or not".
+                entry.inventoryGroup = DEFAULT_GROUP;
+            }
+            if (entryTag.contains("defaultGameMode", Tag.TAG_STRING)) {
+                entry.defaultGameMode = net.minecraft.world.level.GameType
+                        .byName(entryTag.getString("defaultGameMode"), null);
+            }
+            entry.forceGameMode = entryTag.getBoolean("forceGameMode");
+            entry.requiredPermissionLevel = entryTag.getInt("requiredPermissionLevel");
             registry.entries.put(entry.id(), entry);
         }
         return registry;
@@ -261,7 +315,14 @@ public class WorldRegistry extends SavedData {
             if (entry.difficulty != null) {
                 entryTag.putString("difficulty", entry.difficulty.getKey());
             }
-            entryTag.putBoolean("shareDefaultInventory", entry.shareDefaultInventory);
+            entryTag.putString("inventoryGroup", entry.inventoryGroup);
+            if (entry.defaultGameMode != null) {
+                entryTag.putString("defaultGameMode", entry.defaultGameMode.getName());
+            }
+            entryTag.putBoolean("forceGameMode", entry.forceGameMode);
+            entryTag.putInt("requiredPermissionLevel", entry.requiredPermissionLevel);
+            // Kept for 1.4.x compatibility: an older build still understands this flag.
+            entryTag.putBoolean("shareDefaultInventory", entry.sharesDefaultInventory());
             list.add(entryTag);
         }
         tag.put("worlds", list);
@@ -347,15 +408,82 @@ public class WorldRegistry extends SavedData {
         }
     }
 
-    /** Toggles whether a world shares the default inventory group. Returns true if it changed. */
-    public boolean setShareDefaultInventory(String id, boolean share) {
+    /**
+     * Puts a world into an inventory group. Pass {@code null} or the world's own id to give it its
+     * own group again. Returns true if the group actually changed.
+     */
+    public boolean setInventoryGroup(String id, @Nullable String group) {
         WorldEntry entry = entries.get(id);
-        if (entry != null && entry.shareDefaultInventory != share) {
-            entry.shareDefaultInventory = share;
+        if (entry == null) {
+            return false;
+        }
+        String normalized = group == null || group.equals(id) ? "" : group;
+        if (entry.inventoryGroup.equals(normalized)) {
+            return false;
+        }
+        entry.inventoryGroup = normalized;
+        setDirty();
+        return true;
+    }
+
+    /**
+     * Sets a world's game-mode policy. {@code mode == null} clears it (the world stops having an
+     * opinion); {@code forced} re-applies it on every entry instead of only the first visit.
+     */
+    public void setGameMode(String id, @Nullable net.minecraft.world.level.GameType mode, boolean forced) {
+        WorldEntry entry = entries.get(id);
+        if (entry != null) {
+            entry.defaultGameMode = mode;
+            entry.forceGameMode = mode != null && forced;
             setDirty();
+        }
+    }
+
+    /** Sets the minimum permission level needed to enter a world; 0 = everyone. */
+    public void setRequiredPermissionLevel(String id, int level) {
+        WorldEntry entry = entries.get(id);
+        if (entry != null && entry.requiredPermissionLevel != level) {
+            entry.requiredPermissionLevel = level;
+            setDirty();
+        }
+    }
+
+    /**
+     * Whether a player may enter a world. Vanilla dimensions are never restricted; a missing entry
+     * means the world is gone, which the callers report separately.
+     */
+    public static boolean mayEnter(net.minecraft.server.level.ServerPlayer player, WorldEntry entry) {
+        return entry.requiredPermissionLevel() <= 0 || player.hasPermissions(entry.requiredPermissionLevel());
+    }
+
+    /** Whether a player may enter the world backing a dimension (vanilla dimensions: always). */
+    public static boolean mayEnter(net.minecraft.server.level.ServerPlayer player,
+                                   MinecraftServer server, ResourceKey<Level> dimension) {
+        String group = groupOf(dimension);
+        if (DEFAULT_GROUP.equals(group)) {
             return true;
         }
-        return false;
+        WorldEntry entry = get(server).byId(group);
+        return entry == null || mayEnter(player, entry);
+    }
+
+    /** Toggles whether a world shares the default inventory group. Returns true if it changed. */
+    public boolean setShareDefaultInventory(String id, boolean share) {
+        return setInventoryGroup(id, share ? DEFAULT_GROUP : null);
+    }
+
+    /**
+     * All inventory groups in use, group id → member worlds, insertion-ordered. The
+     * {@value #DEFAULT_GROUP} group is always present (it holds the vanilla dimensions) even when no
+     * managed world was put into it.
+     */
+    public Map<String, java.util.List<WorldEntry>> groups() {
+        Map<String, java.util.List<WorldEntry>> byGroup = new LinkedHashMap<>();
+        byGroup.put(DEFAULT_GROUP, new java.util.ArrayList<>());
+        for (WorldEntry entry : entries.values()) {
+            byGroup.computeIfAbsent(entry.inventoryGroup(), key -> new java.util.ArrayList<>()).add(entry);
+        }
+        return byGroup;
     }
 
     public void setSpawn(String id, BlockPos pos, float angle) {
@@ -377,9 +505,9 @@ public class WorldRegistry extends SavedData {
     }
 
     /**
-     * Inventory group of a dimension, honouring the per-world {@code shareDefaultInventory} flag:
-     * a flagged world reports the {@value #DEFAULT_GROUP} group so players keep their default-world
-     * items there. Unlike {@link #groupOf}, this is only about player-state grouping — game rules,
+     * Inventory group of a dimension, honouring the per-world {@link WorldEntry#inventoryGroup()}:
+     * a world put into another group reports that group, so every world in it shares one per-player
+     * state. Unlike {@link #groupOf}, this is only about player-state grouping — game rules,
      * time, weather and difficulty stay keyed by the world's own id.
      */
     public static String inventoryGroupOf(MinecraftServer server, ResourceKey<Level> dimension) {
@@ -388,6 +516,6 @@ public class WorldRegistry extends SavedData {
             return group;
         }
         WorldEntry entry = get(server).byId(group);
-        return entry != null && entry.sharesDefaultInventory() ? DEFAULT_GROUP : group;
+        return entry != null ? entry.inventoryGroup() : group;
     }
 }

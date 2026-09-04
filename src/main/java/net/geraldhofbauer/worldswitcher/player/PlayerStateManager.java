@@ -69,6 +69,14 @@ public final class PlayerStateManager {
             if (!(event.getEntity() instanceof ServerPlayer player) || SWITCHING.contains(player.getUUID())) {
                 return;
             }
+            // Access first: a restricted world must not be reachable through a portal either,
+            // and that holds whether or not per-world state is enabled.
+            if (!WorldRegistry.mayEnter(player, player.server, event.getDimension())) {
+                event.setCanceled(true);
+                player.sendSystemMessage(Messages.error(
+                        "You do not have permission to enter that world."));
+                return;
+            }
             String fromGroup = WorldRegistry.inventoryGroupOf(player.server, player.level().dimension());
             String toGroup = WorldRegistry.inventoryGroupOf(player.server, event.getDimension());
             if (fromGroup.equals(toGroup) || !Config.separateInventories()) {
@@ -334,7 +342,83 @@ public final class PlayerStateManager {
             }
             store.setCurrentGroup(player.getUUID(), respawnGroup);
         }
+
+        /**
+         * A world's game-mode policy, for every arrival that is NOT a {@code /ws} switch — portals
+         * above all. LOWEST so the per-world state (which may carry a remembered game mode) has
+         * been restored by the handler above before we override it. {@code /ws} applies it inside
+         * {@link #switchPlayer} instead, because there the state is restored after the teleport,
+         * i.e. after this event has already fired.
+         */
+        @SubscribeEvent(priority = EventPriority.LOWEST)
+        public void onChangedDimensionGameMode(PlayerEvent.PlayerChangedDimensionEvent event) {
+            if (event.getEntity() instanceof ServerPlayer player
+                    && !SWITCHING.contains(player.getUUID())) {
+                applyWorldGameMode(player, player.serverLevel());
+            }
+        }
+
+        /** Respawning can land in a world without a dimension-change event — re-apply its policy. */
+        @SubscribeEvent(priority = EventPriority.LOWEST)
+        public void onRespawnGameMode(PlayerEvent.PlayerRespawnEvent event) {
+            if (event.getEntity() instanceof ServerPlayer player) {
+                applyWorldGameMode(player, player.serverLevel());
+            }
+        }
+
+        /**
+         * Login: enforce the world's access level, then its game-mode policy. A player who logged
+         * out in a world that has since been restricted (or who lost the permission meanwhile) is
+         * moved to the default world with their default state, the same way an unloaded world is
+         * reconciled. LOWEST so the reconciliation above has finished first.
+         */
+        @SubscribeEvent(priority = EventPriority.LOWEST)
+        public void onLoggedInAccess(PlayerEvent.PlayerLoggedInEvent event) {
+            if (!(event.getEntity() instanceof ServerPlayer player)) {
+                return;
+            }
+            MinecraftServer server = player.server;
+            WorldRegistry.WorldEntry entry = WorldRegistry.get(server)
+                    .byId(WorldRegistry.groupOf(player.level().dimension()));
+            if (entry != null && !WorldRegistry.mayEnter(player, entry)) {
+                WorldSwitcherMod.LOGGER.info("{} logged in inside restricted world '{}' "
+                        + "(needs permission level {}) — moving them to the default world",
+                        player.getGameProfile().getName(), entry.name(), entry.requiredPermissionLevel());
+                player.sendSystemMessage(Messages.error("World '" + entry.name()
+                        + "' is restricted — you were moved to the default world."));
+                switchPlayer(player, server.overworld());
+                return;
+            }
+            applyWorldGameMode(player, player.serverLevel());
+        }
     };
+
+    /**
+     * Applies the game-mode policy of the world the player is standing in, if it has one: on every
+     * entry when the world forces it, otherwise only on the first visit of its inventory group.
+     *
+     * <p>"First visit" means the group has no stored player state yet. With
+     * {@code separateInventories = false} there is never any, so only forced modes apply — without
+     * per-world state there is no remembered mode a default could seed.</p>
+     */
+    public static void applyWorldGameMode(ServerPlayer player, ServerLevel level) {
+        MinecraftServer server = player.server;
+        WorldRegistry.WorldEntry entry = WorldRegistry.get(server)
+                .byId(WorldRegistry.groupOf(level.dimension()));
+        if (entry == null || entry.defaultGameMode() == null) {
+            return;
+        }
+        if (!entry.forceGameMode()) {
+            if (!Config.separateInventories()) {
+                return;
+            }
+            String group = WorldRegistry.inventoryGroupOf(server, level.dimension());
+            if (PlayerStateStore.get(server).getSnapshot(player.getUUID(), group) != null) {
+                return; // been here before — their remembered mode wins
+            }
+        }
+        player.setGameMode(entry.defaultGameMode());
+    }
 
     /** Switches a player to another world group, swapping player state if configured. */
     public static void switchPlayer(ServerPlayer player, ServerLevel target) {
@@ -348,6 +432,7 @@ public final class PlayerStateManager {
             BlockPos spawn = targetSpawn(server, target);
             teleportGuarded(player, target, spawn.getX() + 0.5, spawn.getY(), spawn.getZ() + 0.5,
                     targetSpawnAngle(server, target), 0.0F);
+            applyWorldGameMode(player, target);
             return;
         }
 
@@ -407,12 +492,15 @@ public final class PlayerStateManager {
                 PlayerSnapshot.applyFresh(player);
             }
         }
+        // Before setCurrentGroup, so "first visit" is still decided by the absence of a snapshot.
+        applyWorldGameMode(player, destLevel);
         store.setCurrentGroup(player.getUUID(), toGroup);
     }
 
     /**
-     * Re-groups online players standing in a world whose {@code shareDefaultInventory} flag just
-     * changed: their inventory group flips, so swap their live player state to the new group's
+     * Re-groups online players standing in a world whose inventory group just changed
+     * ({@code /wsc group set|unset}, or the older {@code shareinventory} flag): swap their live
+     * player state to the new group's
      * stored snapshot in place — no teleport, they stay put, the old group's state is preserved
      * for a possible flip back. Rare admin operation; modded client views (e.g. the Curios HUD)
      * may lag until the next relog.
@@ -446,8 +534,33 @@ public final class PlayerStateManager {
             if (ModdedPlayerState.anyEnabled()) {
                 applyModded(player, stored);
             }
+            applyWorldGameMode(player, player.serverLevel());
             store.setCurrentGroup(player.getUUID(), newGroup);
         }
+    }
+
+    /**
+     * Applies a stored snapshot to an online player where they stand, without teleporting them —
+     * used by the admin transfer commands after they rewrite the store, so the player's live state
+     * cannot overwrite what was just written on their next world switch. Position is deliberately
+     * ignored, as everywhere else.
+     */
+    public static void applyStoredInPlace(ServerPlayer player, @Nullable CompoundTag stored) {
+        if (stored != null) {
+            PlayerSnapshot.apply(player, stored);
+        } else {
+            PlayerSnapshot.applyFresh(player);
+        }
+        if (ModdedPlayerState.anyEnabled()) {
+            applyModded(player, stored);
+        }
+    }
+
+    /** The inventory group a player's state is currently tracked under. */
+    public static String trackedGroup(MinecraftServer server, ServerPlayer player) {
+        String tracked = PlayerStateStore.get(server).getCurrentGroup(player.getUUID());
+        return tracked.isEmpty()
+                ? WorldRegistry.inventoryGroupOf(server, player.level().dimension()) : tracked;
     }
 
     /** Applies the modded portion of a snapshot, or modded defaults when none is stored. */

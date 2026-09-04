@@ -58,6 +58,8 @@ public class WorldSwitcherMod {
     public void onServerStarted(ServerStartedEvent event) {
         DynamicDimensionManager.loadPersistedWorlds(event.getServer());
         net.geraldhofbauer.worldswitcher.hooks.CommandHookService.load(event.getServer());
+        // After the registries are frozen, so the attachment types are complete.
+        net.geraldhofbauer.worldswitcher.player.data.PlayerDataConfig.load(event.getServer());
     }
 
     @SubscribeEvent

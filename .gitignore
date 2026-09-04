@@ -51,6 +51,7 @@ test-server/server-input.pipe
 .claude/plans/
 .claude/jobs/
 test-server/config/worldswitcher-server.toml
+test-server/config/cosmeticarmorreworked-common.toml
 test-server/eula.txt
 
 # local repro/debug server

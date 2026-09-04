@@ -2,6 +2,9 @@ package net.geraldhofbauer.worldswitcher.player;
 
 import net.geraldhofbauer.worldswitcher.Config;
 import net.geraldhofbauer.worldswitcher.WorldSwitcherMod;
+import net.geraldhofbauer.worldswitcher.player.data.PlayerDataBridge;
+import net.geraldhofbauer.worldswitcher.player.data.PlayerDataBridges;
+import net.geraldhofbauer.worldswitcher.player.data.PlayerDataConfig;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
@@ -32,7 +35,14 @@ import java.util.List;
  *     {@code addAdditionalSaveData}/{@code readAdditionalSaveData}, used via cached reflection;
  *     fresh defaults come from instantiating a new data object. TAN re-syncs clients itself
  *     (tick diff).</li>
+ * <li><b>{@link PlayerDataBridge}s</b> for mods that keep player data in their own storage, out of
+ *     reach of 1. and 2. — Cosmetic Armor Reworked writes its own {@code .cosarmor} files, for
+ *     instance. Each such mod needs its own integration; they are registered in
+ *     {@link PlayerDataBridges}.</li>
  * </ol>
+ *
+ * <p>Which individual keys take part is decided per key by {@link PlayerDataConfig}, on top of the
+ * coarse master switches in {@link Config}.</p>
  *
  * <p>Timing matters: mods sync their state to the client when the player joins the destination
  * level ({@code EntityJoinLevelEvent}, e.g. Curios), so apply must run BEFORE the teleport —
@@ -41,8 +51,18 @@ import java.util.List;
  */
 public final class ModdedPlayerState {
 
-    private static final String KEY_ATTACHMENTS = "attachments";
-    private static final String KEY_PERSISTENT = "persistentData";
+    /** Snapshot sub-tag holding the serialized data attachments, keyed by attachment id. */
+    public static final String KEY_ATTACHMENTS = "attachments";
+    /** Snapshot sub-tag holding the player's persistent NBT, keyed by its top-level keys. */
+    public static final String KEY_PERSISTENT = "persistentData";
+    /** Snapshot sub-tag holding one compound per {@link PlayerDataBridge}, keyed by bridge id. */
+    public static final String KEY_BRIDGES = "bridges";
+    /**
+     * Config key for the Tough As Nails integration. TAN keeps its legacy snapshot layout (see
+     * {@code tan*} below) rather than moving into {@link #KEY_BRIDGES}, so existing saves keep
+     * working — but it is listed and toggled like a bridge.
+     */
+    public static final String TAN_KEY = "toughasnails:player_data";
     private static final String KEY_TAN_THIRST = "tanThirst";
     private static final String KEY_TAN_TEMPERATURE = "tanTemperature";
     private static final String KEY_TAN_CLEMENCY = "tanClimateClemency";
@@ -58,7 +78,23 @@ public final class ModdedPlayerState {
     public static boolean anyEnabled() {
         return Config.separateInventories()
                 && (Config.swapModAttachments() || Config.swapPersistentData()
-                        || (Config.swapToughAsNails() && TanHooks.available()));
+                        || (Config.swapToughAsNails() && TanHooks.available())
+                        || PlayerDataBridges.anyAvailable());
+    }
+
+    /** True when Tough As Nails is installed and its API bound — used by the config catalog. */
+    public static boolean tanAvailable() {
+        return TanHooks.available();
+    }
+
+    /** A data attachment takes part unless excluded outright or marked global. */
+    private static boolean swapAttachment(String key) {
+        return !Config.attachmentExcludes().contains(key) && PlayerDataConfig.isPerWorld(key);
+    }
+
+    /** A persistent-NBT key takes part unless excluded outright or marked global. */
+    private static boolean swapPersistentKey(String key) {
+        return !Config.persistentDataExcludes().contains(key) && PlayerDataConfig.isPerWorld(key);
     }
 
     public static void capture(ServerPlayer player, CompoundTag out) {
@@ -68,22 +104,27 @@ public final class ModdedPlayerState {
         if (Config.swapModAttachments() && !attachmentsBroken) {
             CompoundTag attachments = player.serializeAttachments(player.registryAccess());
             if (attachments != null) {
-                for (String excluded : Config.attachmentExcludes()) {
-                    attachments.remove(excluded);
+                for (String key : List.copyOf(attachments.getAllKeys())) {
+                    if (!swapAttachment(key)) {
+                        attachments.remove(key);
+                    }
                 }
                 out.put(KEY_ATTACHMENTS, attachments);
             }
         }
         if (Config.swapPersistentData()) {
             CompoundTag persistent = player.getPersistentData().copy();
-            for (String excluded : Config.persistentDataExcludes()) {
-                persistent.remove(excluded);
+            for (String key : List.copyOf(persistent.getAllKeys())) {
+                if (!swapPersistentKey(key)) {
+                    persistent.remove(key);
+                }
             }
             out.put(KEY_PERSISTENT, persistent);
         }
-        if (Config.swapToughAsNails() && TanHooks.available()) {
+        if (Config.swapToughAsNails() && PlayerDataConfig.isPerWorld(TAN_KEY) && TanHooks.available()) {
             TanHooks.capture(player, out);
         }
+        captureBridges(player, out);
     }
 
     /** Applies the modded portion of a stored snapshot (absent sub-tags reset to defaults). */
@@ -94,9 +135,11 @@ public final class ModdedPlayerState {
         if (Config.swapModAttachments() && !attachmentsBroken) {
             clearAttachments(player);
             CompoundTag stored = tag.getCompound(KEY_ATTACHMENTS);
-            // Filter again on apply — excludes may have changed since the snapshot was taken.
-            for (String excluded : Config.attachmentExcludes()) {
-                stored.remove(excluded);
+            // Filter again on apply — the config may have changed since the snapshot was taken.
+            for (String key : List.copyOf(stored.getAllKeys())) {
+                if (!swapAttachment(key)) {
+                    stored.remove(key);
+                }
             }
             if (!stored.isEmpty()) {
                 deserializeAttachments(player, stored);
@@ -111,7 +154,7 @@ public final class ModdedPlayerState {
             //   uninitialized forever (no slots in the GUI until relog) — reset() rebuilds the
             //   empty slot layout.
             if (!stored.contains(CuriosHooks.ATTACHMENT_ID)
-                    && !Config.attachmentExcludes().contains(CuriosHooks.ATTACHMENT_ID)
+                    && swapAttachment(CuriosHooks.ATTACHMENT_ID)
                     && CuriosHooks.available()) {
                 CuriosHooks.resetInventory(player);
             }
@@ -119,9 +162,10 @@ public final class ModdedPlayerState {
         if (Config.swapPersistentData()) {
             applyPersistentData(player, tag.getCompound(KEY_PERSISTENT));
         }
-        if (Config.swapToughAsNails() && TanHooks.available()) {
+        if (Config.swapToughAsNails() && PlayerDataConfig.isPerWorld(TAN_KEY) && TanHooks.available()) {
             TanHooks.apply(player, tag);
         }
+        applyBridges(player, tag);
     }
 
     /** First visit of a world group: modded state resets to defaults. */
@@ -138,7 +182,7 @@ public final class ModdedPlayerState {
             return;
         }
         for (String key : current.getAllKeys()) {
-            if (Config.attachmentExcludes().contains(key)) {
+            if (!swapAttachment(key)) {
                 continue;
             }
             ResourceLocation id = ResourceLocation.tryParse(key);
@@ -171,14 +215,43 @@ public final class ModdedPlayerState {
     private static void applyPersistentData(ServerPlayer player, CompoundTag stored) {
         CompoundTag live = player.getPersistentData();
         for (String key : List.copyOf(live.getAllKeys())) {
-            if (!Config.persistentDataExcludes().contains(key)) {
+            if (swapPersistentKey(key)) {
                 live.remove(key);
             }
         }
         for (String key : stored.getAllKeys()) {
-            if (!Config.persistentDataExcludes().contains(key)) {
+            if (swapPersistentKey(key)) {
                 live.put(key, stored.get(key).copy());
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ bridges
+
+    private static void captureBridges(ServerPlayer player, CompoundTag out) {
+        CompoundTag bridges = new CompoundTag();
+        for (PlayerDataBridge bridge : PlayerDataBridges.all()) {
+            if (!bridge.available() || !PlayerDataConfig.isPerWorld(bridge.id())) {
+                continue;
+            }
+            CompoundTag captured = bridge.capture(player);
+            if (captured != null) {
+                bridges.put(bridge.id(), captured);
+            }
+        }
+        if (!bridges.isEmpty()) {
+            out.put(KEY_BRIDGES, bridges);
+        }
+    }
+
+    private static void applyBridges(ServerPlayer player, CompoundTag tag) {
+        CompoundTag bridges = tag.getCompound(KEY_BRIDGES);
+        for (PlayerDataBridge bridge : PlayerDataBridges.all()) {
+            if (!bridge.available() || !PlayerDataConfig.isPerWorld(bridge.id())) {
+                continue;
+            }
+            // Absent = the player has never been in this world group: start fresh.
+            bridge.apply(player, bridges.contains(bridge.id()) ? bridges.getCompound(bridge.id()) : null);
         }
     }
 
@@ -344,7 +417,7 @@ public final class ModdedPlayerState {
 
     /** Merges the modded sub-tags of {@code from} into {@code into} (used on respawn/login). */
     public static void mergeModdedInto(CompoundTag from, CompoundTag into) {
-        for (String key : new ArrayList<>(List.of(KEY_ATTACHMENTS, KEY_PERSISTENT,
+        for (String key : new ArrayList<>(List.of(KEY_ATTACHMENTS, KEY_PERSISTENT, KEY_BRIDGES,
                 KEY_TAN_THIRST, KEY_TAN_TEMPERATURE, KEY_TAN_CLEMENCY))) {
             if (from.contains(key)) {
                 into.put(key, from.get(key).copy());

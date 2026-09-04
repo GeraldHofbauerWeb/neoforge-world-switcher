@@ -18,7 +18,7 @@ public final class Config {
 
     private static final ModConfigSpec.ConfigValue<String> WORLDS_FOLDER = BUILDER
             .comment("Folder containing importable world saves, relative to the server root",
-                    "(absolute paths allowed). /wsc import scans this folder including subpaths.")
+                    "(absolute paths allowed). /wsc world import scans this folder including subpaths.")
             .define("worldsFolder", "worlds");
 
     private static final ModConfigSpec.BooleanValue AUTO_LOAD_ON_STARTUP = BUILDER
@@ -47,30 +47,39 @@ public final class Config {
             .define("importCopyAsync", true);
 
     private static final ModConfigSpec.BooleanValue SWAP_MOD_ATTACHMENTS = BUILDER
-            .comment("Include modded player data stored as NeoForge data attachments in the",
-                    "per-world state (e.g. Curios slots 'curios:inventory'). Only active when",
+            .comment("Master switch for modded player data stored as NeoForge data attachments",
+                    "(e.g. Curios slots 'curios:inventory'). Which individual attachments take",
+                    "part is decided per key in serverconfig/worldswitcher-playerdata.toml —",
+                    "this switch turns the whole mechanism off. Only active when",
                     "separateInventories is on.")
             .define("swapModAttachments", true);
 
     private static final ModConfigSpec.ConfigValue<java.util.List<? extends String>> ATTACHMENT_EXCLUDES = BUILDER
-            .comment("Attachment ids that stay global (not swapped), e.g. [\"carryon:carry_on_data\"].")
+            .comment("Legacy override: attachment ids that always stay global, no matter what",
+                    "worldswitcher-playerdata.toml says, e.g. [\"carryon:carry_on_data\"]. Kept for",
+                    "compatibility — prefer setting the key to false in that file instead. Entries",
+                    "here seed it as global the first time it is generated.")
             .defineListAllowEmpty("attachmentExcludes", java.util.List.of(), () -> "",
                     o -> o instanceof String s && net.minecraft.resources.ResourceLocation.tryParse(s) != null);
 
     private static final ModConfigSpec.BooleanValue SWAP_PERSISTENT_DATA = BUILDER
-            .comment("Include the player's persistent NBT (getPersistentData / 'NeoForgeData',",
-                    "used e.g. by Waystones and Quark) in the per-world state.")
+            .comment("Master switch for the player's persistent NBT (getPersistentData /",
+                    "'NeoForgeData', used e.g. by Waystones and Quark). Individual top-level keys",
+                    "are decided in serverconfig/worldswitcher-playerdata.toml.")
             .define("swapPersistentData", true);
 
     private static final ModConfigSpec.ConfigValue<java.util.List<? extends String>> PERSISTENT_DATA_EXCLUDES = BUILDER
-            .comment("Top-level persistent-data keys that stay global (not swapped),",
-                    "e.g. [\"WaystonesData\"].")
+            .comment("Legacy override: persistent-data keys that always stay global, no matter",
+                    "what worldswitcher-playerdata.toml says, e.g. [\"WaystonesData\"]. Kept for",
+                    "compatibility — prefer setting the key to false in that file instead. Entries",
+                    "here seed it as global the first time it is generated.")
             .defineListAllowEmpty("persistentDataExcludes", java.util.List.of(), () -> "",
                     o -> o instanceof String);
 
     private static final ModConfigSpec.BooleanValue SWAP_TOUGH_AS_NAILS = BUILDER
-            .comment("Include Tough As Nails thirst and temperature in the per-world state",
-                    "(no effect when TAN is not installed).")
+            .comment("Master switch for Tough As Nails thirst and temperature in the per-world",
+                    "state (no effect when TAN is not installed). Can also be turned off per key",
+                    "as 'toughasnails:player_data' in worldswitcher-playerdata.toml.")
             .define("swapToughAsNails", true);
 
     private static final ModConfigSpec.BooleanValue PER_WORLD_DIFFICULTY = BUILDER

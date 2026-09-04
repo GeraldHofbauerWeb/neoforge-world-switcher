@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Curated descriptions for well-known player-data keys. Purely cosmetic: they become the comment",
+    "above the key in the generated worldswitcher-playerdata.toml and show up in",
+    "/wsc config playerdata scan. Anything not listed here falls back to the owning mod's display",
+    "name plus a guess derived from the shape of the stored NBT.",
+    "'mod' is only needed for persistent-NBT keys, which carry no namespace to look up."
+  ],
+  "curios:inventory": {
+    "what": "All Curios accessory slots — rings, charms, belts, and whatever other mods add to them (Elytra Slot, Caelus, a worn tool belt, ...)"
+  },
+  "carryon:carry_on_data": {
+    "what": "The block or entity the player is currently carrying on their head"
+  },
+  "cosmeticarmorreworked:cosarmor": {
+    "what": "Cosmetic armor slots and their hide-vanilla-armor flags"
+  },
+  "toughasnails:player_data": {
+    "what": "Thirst, temperature and climate clemency"
+  },
+  "WaystonesData": {
+    "mod": "Waystones",
+    "what": "Which waystones the player has activated"
+  },
+  "PlayerPersisted": {
+    "what": "Generic 'survives death' sub-tag — several mods put their own data in here"
+  }
+}

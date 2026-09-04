@@ -1,16 +1,19 @@
 package net.geraldhofbauer.worldswitcher.command;
 
+import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.tree.CommandNode;
+import com.mojang.brigadier.tree.LiteralCommandNode;
 import net.geraldhofbauer.worldswitcher.Config;
 import net.geraldhofbauer.worldswitcher.WorldSwitcherMod;
 import net.geraldhofbauer.worldswitcher.hooks.CommandHookService;
 import net.geraldhofbauer.worldswitcher.hooks.CommandHooksConfig;
-import net.geraldhofbauer.worldswitcher.player.PlayerStateManager;
 import net.geraldhofbauer.worldswitcher.util.Messages;
 import net.geraldhofbauer.worldswitcher.world.DynamicDimensionManager;
 import net.geraldhofbauer.worldswitcher.world.ImportService;
@@ -18,6 +21,7 @@ import net.geraldhofbauer.worldswitcher.world.WorldRegistry;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -28,35 +32,87 @@ import net.minecraft.util.RandomSource;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
 import java.util.stream.Stream;
 
 /**
- * {@code /wsc <action> [args]} — world management, OP level 2+.
+ * {@code /wsc <category> <action> [args]} — world management, OP level 2+.
+ *
+ * <p>The tree is grouped by what an action operates on: {@code world}, {@code player}, {@code group}
+ * and {@code config}, with {@code help}, {@code confirm} and {@code cancel} at the top because they
+ * belong to no category (the latter two are what the clickable confirmation buttons run).</p>
+ *
+ * <p>Every command that existed before 1.5.0 is still registered at the top level as a deprecated
+ * alias, so nothing that is written down in a server's docs stops working. Running one prints a
+ * one-line pointer to its replacement. The aliases are implemented as brigadier redirects into the
+ * canonical nodes — never as copies — so there is exactly one implementation of each action; they
+ * are scheduled for removal in 2.0.0.</p>
  */
 public final class WscCommand {
 
-    /** Sentinel "UUID" for non-player command sources (console) in the pending-delete map. */
-    private static final UUID CONSOLE_UUID = new UUID(0L, 0L);
-    private static final long CONFIRM_TIMEOUT_MS = 30_000;
+    /** Old path → new path, for the deprecated top-level aliases. */
+    private static final List<String[]> ALIASES = List.of(
+            new String[] {"list", "world list"},
+            new String[] {"info", "world info"},
+            new String[] {"create", "world create"},
+            new String[] {"import", "world import"},
+            new String[] {"rename", "world rename"},
+            new String[] {"load", "world load"},
+            new String[] {"unload", "world unload"},
+            new String[] {"delete", "world delete"},
+            new String[] {"gamerule", "world gamerule"},
+            new String[] {"difficulty", "world difficulty"},
+            new String[] {"tp", "player tp"},
+            new String[] {"hooks", "config hooks"});
 
-    private record PendingDelete(String worldId, long requestedAt) {
-    }
-
-    private static final Map<UUID, PendingDelete> PENDING_DELETES = new HashMap<>();
+    private static final List<String> HELP_TOPICS = List.of("worlds", "players", "groups", "config");
 
     private WscCommand() {
     }
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-        dispatcher.register(Commands.literal("wsc")
+        LiteralCommandNode<CommandSourceStack> root = dispatcher.register(Commands.literal("wsc")
                 .requires(source -> source.hasPermission(2))
                 .executes(WscCommand::executeHelp)
                 .then(Commands.literal("help")
-                        .executes(WscCommand::executeHelp))
+                        .executes(WscCommand::executeHelp)
+                        .then(Commands.argument("topic", StringArgumentType.word())
+                                .suggests((context, builder) ->
+                                        SharedSuggestionProvider.suggest(HELP_TOPICS, builder))
+                                .executes(WscCommand::executeHelpTopic)))
+                .then(worldNode())
+                .then(playerNode())
+                .then(GroupCommands.build())
+                .then(configNode())
+                .then(Commands.literal("confirm")
+                        .executes(context -> PendingConfirmations.confirm(context.getSource())))
+                .then(Commands.literal("cancel")
+                        .executes(context -> PendingConfirmations.cancel(context.getSource())))
+                // shareinventory predates named groups and does not map 1:1 onto one node, so it
+                // keeps its own thin handlers instead of being a redirect.
+                .then(Commands.literal("shareinventory")
+                        .then(Commands.argument("world", StringArgumentType.word())
+                                .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                                .executes(deprecated("/wsc shareinventory",
+                                        "/wsc group info", WscCommand::executeShareInventoryQuery))
+                                .then(Commands.argument("value", BoolArgumentType.bool())
+                                        .executes(deprecated("/wsc shareinventory <world> <bool>",
+                                                "/wsc group set <world> default",
+                                                WscCommand::executeShareInventorySet)))))
+                .then(E2eTestHook.enabled() ? E2eTestHook.buildDebugNode()
+                        : Commands.literal("debug").requires(source -> false)));
+
+        for (String[] alias : ALIASES) {
+            addAlias(root, alias[0], alias[1]);
+        }
+    }
+
+    // ------------------------------------------------------------------ categories
+
+    private static LiteralArgumentBuilder<CommandSourceStack> worldNode() {
+        return Commands.literal("world")
+                .executes(WscCommand::executeList)
                 .then(Commands.literal("list")
                         .executes(WscCommand::executeList))
                 .then(Commands.literal("info")
@@ -90,58 +146,176 @@ public final class WscCommand {
                         .then(Commands.argument("world", StringArgumentType.word())
                                 .suggests(WorldSuggestions.REGISTERED_WORLDS)
                                 .executes(WscCommand::executeUnload)))
+                .then(Commands.literal("delete")
+                        .then(Commands.argument("world", StringArgumentType.word())
+                                .suggests(WorldSuggestions.REGISTERED_WORLDS)
+                                .executes(WscCommand::executeDeleteRequest)))
+                .then(GameRuleHelper.buildWscGameruleNode())
+                .then(GameRuleHelper.buildWscDifficultyNode())
+                .then(WorldPolicyCommands.buildGameModeNode())
+                .then(WorldPolicyCommands.buildAccessNode());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> playerNode() {
+        return Commands.literal("player")
                 .then(Commands.literal("tp")
                         .then(Commands.argument("player", EntityArgument.player())
                                 .then(Commands.argument("world", StringArgumentType.word())
                                         .suggests(WorldSuggestions.SWITCH_TARGETS)
                                         .executes(WscCommand::executeTp))))
-                .then(GameRuleHelper.buildWscGameruleNode())
-                .then(GameRuleHelper.buildWscDifficultyNode())
-                .then(Commands.literal("shareinventory")
-                        .then(Commands.argument("world", StringArgumentType.word())
-                                .suggests(WorldSuggestions.REGISTERED_WORLDS)
-                                .executes(WscCommand::executeShareInventoryQuery)
-                                .then(Commands.argument("value", BoolArgumentType.bool())
-                                        .executes(WscCommand::executeShareInventorySet))))
-                .then(Commands.literal("delete")
-                        .then(Commands.argument("world", StringArgumentType.word())
-                                .suggests(WorldSuggestions.REGISTERED_WORLDS)
-                                .executes(WscCommand::executeDeleteRequest)))
-                .then(Commands.literal("confirm")
-                        .executes(WscCommand::executeDeleteConfirm))
-                .then(Commands.literal("cancel")
-                        .executes(WscCommand::executeDeleteCancel))
+                .then(PlayerStateCommands.build());
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> configNode() {
+        return Commands.literal("config")
+                .executes(context -> executeHelpFor(context.getSource(), "config"))
+                .then(PlayerDataCommands.build())
                 .then(Commands.literal("hooks")
                         .executes(WscCommand::executeHooksStatus)
                         .then(Commands.literal("status")
                                 .executes(WscCommand::executeHooksStatus))
                         .then(Commands.literal("reload")
-                                .executes(WscCommand::executeHooksReload)))
-                .then(E2eTestHook.enabled() ? E2eTestHook.buildDebugNode()
-                        : Commands.literal("debug").requires(source -> false)));
+                                .executes(WscCommand::executeHooksReload)));
     }
 
-    /** Bare {@code /wsc} or {@code /wsc help}: short action overview. */
+    // ------------------------------------------------------------------ deprecated aliases
+
+    /**
+     * Registers {@code /wsc <alias>} as a redirect into the canonical node, so the old path keeps
+     * working with a single implementation behind it. A node can carry both a command and a redirect:
+     * the command covers the argument-less form ({@code /wsc list}), the redirect covers everything
+     * with arguments, and the redirect modifier is where the deprecation notice is printed.
+     */
+    private static void addAlias(LiteralCommandNode<CommandSourceStack> root, String alias,
+                                 String canonicalPath) {
+        CommandNode<CommandSourceStack> target = root;
+        for (String segment : canonicalPath.split(" ")) {
+            target = target.getChild(segment);
+            if (target == null) {
+                WorldSwitcherMod.LOGGER.warn("Cannot alias /wsc {} — no such command /wsc {}",
+                        alias, canonicalPath);
+                return;
+            }
+        }
+        String oldCommand = "/wsc " + alias;
+        String newCommand = "/wsc " + canonicalPath;
+
+        LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(alias);
+        Command<CommandSourceStack> command = target.getCommand();
+        if (command != null) {
+            builder.executes(deprecated(oldCommand, newCommand, command));
+        }
+        if (!target.getChildren().isEmpty()) {
+            CommandNode<CommandSourceStack> redirect = target;
+            builder.forward(redirect, context -> {
+                warnDeprecated(context.getSource(), oldCommand, newCommand);
+                return List.of(context.getSource());
+            }, false);
+        }
+        root.addChild(builder.build());
+    }
+
+    /** Wraps a handler so it prints the deprecation notice before doing its work. */
+    private static Command<CommandSourceStack> deprecated(String oldCommand, String newCommand,
+                                                          Command<CommandSourceStack> delegate) {
+        return context -> {
+            warnDeprecated(context.getSource(), oldCommand, newCommand);
+            return delegate.run(context);
+        };
+    }
+
+    private static void warnDeprecated(CommandSourceStack source, String oldCommand,
+                                       String newCommand) {
+        source.sendSuccess(() -> Component.literal("⚠ ").withStyle(ChatFormatting.YELLOW)
+                .append(Messages.info(oldCommand + " is deprecated — use "))
+                .append(Messages.suggestCommand(newCommand, newCommand + " ", ChatFormatting.YELLOW))
+                .append(Messages.info(" (the old form is removed in 2.0.0)")), false);
+    }
+
+    // ------------------------------------------------------------------ help
+
+    /** Bare {@code /wsc} or {@code /wsc help}: the categories, one line each. */
     private static int executeHelp(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
-        source.sendSuccess(() -> Messages.highlight("World Switcher — /wsc <action>:"), false);
-        source.sendSuccess(() -> Messages.info("  list — all worlds (clickable)"), false);
-        source.sendSuccess(() -> Messages.info("  info <world> — seed, spawn, folder, size"), false);
-        source.sendSuccess(() -> Messages.info("  create <name> [seed] — create a fresh world"), false);
-        source.sendSuccess(() -> Messages.info("  import <source> [as <name>] — copy a world from the worlds folder"), false);
-        source.sendSuccess(() -> Messages.info("  rename <world> <newName> — rename (inventories survive)"), false);
-        source.sendSuccess(() -> Messages.info("  load/unload <world> — load or unload at runtime"), false);
-        source.sendSuccess(() -> Messages.info("  tp <player> <world> — switch another player"), false);
-        source.sendSuccess(() -> Messages.info("  gamerule <world> [<rule> [value]] — per-world game rules"), false);
-        source.sendSuccess(() -> Messages.info("  difficulty <world> [value] — per-world difficulty"), false);
-        source.sendSuccess(() -> Messages.info("  shareinventory <world> [true|false] — keep default items here (shared inventory)"), false);
-        source.sendSuccess(() -> Messages.info("  delete <world> — delete world + data (asks to confirm)"), false);
-        source.sendSuccess(() -> Messages.info("  hooks [status|reload] — command hooks on world events"), false);
-        source.sendSuccess(() -> Messages.info("Players switch with /ws <world>."), false);
+        source.sendSuccess(() -> Messages.highlight("World Switcher — /wsc <category> <action>"), false);
+        topic(source, "worlds", "world", "create, import, list, load, delete, per-world rules");
+        topic(source, "players", "player", "teleport someone, move their stored state between worlds");
+        topic(source, "groups", "group", "which worlds share one inventory");
+        topic(source, "config", "config", "modded player data, command hooks");
+        source.sendSuccess(() -> Messages.info("Players switch worlds with /ws <world>."), false);
         return 1;
     }
 
-    /** {@code /wsc hooks [status]}: show the enabled state, default run-as and configured counts. */
+    private static void topic(CommandSourceStack source, String name, String literal, String summary) {
+        source.sendSuccess(() -> Component.literal("  ")
+                .append(Messages.runCommand("/wsc " + literal, "/wsc help " + name, ChatFormatting.AQUA))
+                .append(Messages.info("  " + summary)), false);
+    }
+
+    private static int executeHelpTopic(CommandContext<CommandSourceStack> context) {
+        return executeHelpFor(context.getSource(), StringArgumentType.getString(context, "topic"));
+    }
+
+    private static int executeHelpFor(CommandSourceStack source, String topic) {
+        switch (topic.toLowerCase(Locale.ROOT)) {
+            case "worlds", "world" -> {
+                source.sendSuccess(() -> Messages.highlight("/wsc world <action>:"), false);
+                line(source, "list", "all worlds (clickable)");
+                line(source, "info <world>", "seed, spawn, folder, size, inventory group");
+                line(source, "create <name> [seed]", "create a fresh world");
+                line(source, "import <source> [as <name>]", "copy a world from the worlds folder");
+                line(source, "rename <world> <newName>", "rename (inventories survive)");
+                line(source, "load/unload <world>", "load or unload at runtime");
+                line(source, "delete <world>", "delete world + data (asks to confirm)");
+                line(source, "gamerule <world> [<rule> [value]]", "per-world game rules");
+                line(source, "difficulty <world> [value]", "per-world difficulty");
+                line(source, "gamemode <world> [none|<mode> [forced]]",
+                        "game mode this world hands out");
+                line(source, "access <world> [0-4]", "minimum permission level to enter");
+            }
+            case "players", "player" -> {
+                source.sendSuccess(() -> Messages.highlight("/wsc player <action>:"), false);
+                line(source, "tp <player> <world>", "switch another player");
+                line(source, "state show <player>", "which worlds they have stored state in");
+                line(source, "state copy <player> <from> <to>", "copy their state to another world");
+                line(source, "state move <player> <from> <to>", "copy, then reset the source");
+                line(source, "state swap <player> <a> <b>", "exchange two worlds' state");
+                line(source, "state clear <player> <world>", "reset one world to a fresh start");
+                source.sendSuccess(() -> Messages.info("  Offline players work too. Position never "
+                        + "travels with the state."), false);
+            }
+            case "groups", "group" -> {
+                source.sendSuccess(() -> Messages.highlight("/wsc group <action>:"), false);
+                line(source, "list", "all inventory groups and their worlds");
+                line(source, "info <group>", "worlds in a group, stored player states");
+                line(source, "set <world> <group>", "put a world into a group — worlds in one group "
+                        + "share a single player state");
+                line(source, "unset <world>", "give a world its own group back");
+                source.sendSuccess(() -> Messages.info("  The group 'default' is the vanilla "
+                        + "dimensions — putting a world there keeps your main items."), false);
+            }
+            case "config" -> {
+                source.sendSuccess(() -> Messages.highlight("/wsc config <action>:"), false);
+                line(source, "playerdata [status]", "which modded player data is per world");
+                line(source, "playerdata scan", "everything found, with mod names and descriptions");
+                line(source, "playerdata set <key> <true|false>", "per world (true) or global (false)");
+                line(source, "playerdata write/reload", "regenerate or re-read the config file");
+                line(source, "hooks [status|reload]", "command hooks on world events");
+            }
+            default -> {
+                source.sendFailure(Messages.error("Unknown help topic: " + topic
+                        + " (try " + String.join(", ", HELP_TOPICS) + ")"));
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    private static void line(CommandSourceStack source, String usage, String summary) {
+        source.sendSuccess(() -> Messages.info("  " + usage + " — " + summary), false);
+    }
+
+    /** {@code /wsc config hooks [status]}: enabled state, default run-as and configured counts. */
     private static int executeHooksStatus(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         CommandHooksConfig config = CommandHookService.config();
@@ -155,11 +329,11 @@ public final class WscCommand {
             source.sendSuccess(() -> Messages.info("    " + worldId + ": " + config.hookCount(worldId)), false);
         }
         source.sendSuccess(() -> Messages.info("File: serverconfig/worldswitcher-hooks.json "
-                + "— edit and /wsc hooks reload."), false);
+                + "— edit and /wsc config hooks reload."), false);
         return 1;
     }
 
-    /** {@code /wsc hooks reload}: reload the JSON file live and report the loaded counts. */
+    /** {@code /wsc config hooks reload}: reload the JSON file live and report the loaded counts. */
     private static int executeHooksReload(CommandContext<CommandSourceStack> context) {
         CommandSourceStack source = context.getSource();
         CommandHooksConfig config = CommandHookService.reload(source.getServer());
@@ -216,8 +390,17 @@ public final class WscCommand {
                 line.append(Component.literal("  " + playerCount + " player" + (playerCount == 1 ? "" : "s"))
                         .withStyle(ChatFormatting.GRAY));
             }
-            if (entry.sharesDefaultInventory()) {
-                line.append(Component.literal("  keep-inv").withStyle(ChatFormatting.GRAY));
+            if (entry.grouped()) {
+                line.append(Component.literal("  group: " + entry.inventoryGroup())
+                        .withStyle(ChatFormatting.GRAY));
+            }
+            if (entry.requiredPermissionLevel() > 0) {
+                line.append(Component.literal("  \uD83D\uDD12 level " + entry.requiredPermissionLevel())
+                        .withStyle(ChatFormatting.GOLD));
+            }
+            if (entry.defaultGameMode() != null) {
+                line.append(Component.literal("  " + entry.defaultGameMode().getName()
+                        + (entry.forceGameMode() ? "!" : "")).withStyle(ChatFormatting.GRAY));
             }
             if (entry.id().equals(currentGroup)) {
                 line.append(Component.literal("  (you are here)").withStyle(ChatFormatting.YELLOW));
@@ -225,7 +408,8 @@ public final class WscCommand {
             source.sendSuccess(() -> line, false);
         }
         if (entries.isEmpty()) {
-            source.sendSuccess(() -> Messages.info("  (none — use /wsc import or /wsc create)"), false);
+            source.sendSuccess(() -> Messages.info(
+                    "  (none — use /wsc world import or /wsc world create)"), false);
         }
         return entries.size() + 1;
     }
@@ -252,8 +436,14 @@ public final class WscCommand {
         source.sendSuccess(() -> Messages.info("  spawn: "
                 + (entry.spawnPos() != null ? entry.spawnPos().toShortString() : "not set")), false);
         source.sendSuccess(() -> Messages.info("  folder: " + dimensionPath + " (" + formatSize(diskSize) + ")"), false);
-        source.sendSuccess(() -> Messages.info("  inventory: " + (entry.sharesDefaultInventory()
-                ? "shared with default (keep-inventory)" : "separate (own group)")), false);
+        source.sendSuccess(() -> Messages.info("  game mode: "
+                + WorldPolicyCommands.describeGameMode(entry)), false);
+        source.sendSuccess(() -> Messages.info("  access: "
+                + WorldPolicyCommands.describeAccess(entry)), false);
+        source.sendSuccess(() -> Messages.info("  inventory group: " + entry.inventoryGroup()
+                + (entry.sharesDefaultInventory() ? " (players keep their default-world items here)"
+                        : entry.grouped() ? " (shared with the other worlds in it)" : " (its own)")),
+                false);
         if (!entry.sourcePath().isEmpty()) {
             source.sendSuccess(() -> Messages.info("  imported from: " + entry.sourcePath()), false);
         }
@@ -265,9 +455,8 @@ public final class WscCommand {
         if (entry == null) {
             return 0;
         }
-        context.getSource().sendSuccess(() -> Messages.info("World '" + entry.name() + "' inventory: "
-                + (entry.sharesDefaultInventory()
-                        ? "shared with default (keep-inventory)" : "separate (own group)")), false);
+        context.getSource().sendSuccess(() -> Messages.info("World '" + entry.name()
+                + "' inventory group: " + entry.inventoryGroup()), false);
         return 1;
     }
 
@@ -276,19 +465,9 @@ public final class WscCommand {
         if (entry == null) {
             return 0;
         }
-        CommandSourceStack source = context.getSource();
-        MinecraftServer server = source.getServer();
         boolean value = BoolArgumentType.getBool(context, "value");
-        if (WorldRegistry.get(server).setShareDefaultInventory(entry.id(), value)) {
-            // Re-group players standing in the world so the flip can't corrupt the default group.
-            PlayerStateManager.onInventoryGroupChanged(server, entry.id());
-        }
-        source.sendSuccess(() -> value
-                ? Messages.success("World ").append(Messages.highlight(entry.name()))
-                        .append(Messages.info(" now shares the default inventory — players keep their items here."))
-                : Messages.success("World ").append(Messages.highlight(entry.name()))
-                        .append(Messages.info(" now keeps its own separate inventory again.")), true);
-        return 1;
+        return GroupCommands.setGroup(context.getSource(), entry,
+                value ? WorldRegistry.DEFAULT_GROUP : entry.id());
     }
 
     private static int executeCreate(CommandContext<CommandSourceStack> context, Long seedArg) {
@@ -376,11 +555,7 @@ public final class WscCommand {
     private static int executeTp(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
         ServerPlayer player = EntityArgument.getPlayer(context, "player");
         String worldName = StringArgumentType.getString(context, "world");
-        return WsCommand.switchToWorld(context.getSource(), player, worldName);
-    }
-
-    private static UUID sourceKey(CommandSourceStack source) {
-        return source.getEntity() instanceof ServerPlayer player ? player.getUUID() : CONSOLE_UUID;
+        return WsCommand.switchToWorld(context.getSource(), player, worldName, false);
     }
 
     private static int executeDeleteRequest(CommandContext<CommandSourceStack> context) {
@@ -389,46 +564,27 @@ public final class WscCommand {
             return 0;
         }
         CommandSourceStack source = context.getSource();
-        PENDING_DELETES.put(sourceKey(source), new PendingDelete(entry.id(), System.currentTimeMillis()));
-
-        source.sendSuccess(() -> Messages.error("Delete world '" + entry.name()
-                + "' including ALL its data and stored inventories?"), false);
-        source.sendSuccess(() -> Component.literal("  ")
-                .append(Messages.runCommand("[Confirm]", "/wsc confirm", ChatFormatting.RED))
-                .append(Component.literal("  "))
-                .append(Messages.runCommand("[Cancel]", "/wsc cancel", ChatFormatting.GRAY))
-                .append(Messages.info("  (expires in 30s)")), false);
-        return 1;
-    }
-
-    private static int executeDeleteConfirm(CommandContext<CommandSourceStack> context) {
-        CommandSourceStack source = context.getSource();
-        PendingDelete pending = PENDING_DELETES.remove(sourceKey(source));
-        if (pending == null || System.currentTimeMillis() - pending.requestedAt() > CONFIRM_TIMEOUT_MS) {
-            source.sendFailure(Messages.error("Nothing to confirm (or the request expired)."));
-            return 0;
-        }
-        WorldRegistry.WorldEntry entry = WorldRegistry.get(source.getServer()).byId(pending.worldId());
-        if (entry == null) {
-            source.sendFailure(Messages.error("World no longer exists."));
-            return 0;
-        }
-        try {
-            DynamicDimensionManager.deleteWorld(source.getServer(), entry);
-        } catch (IOException e) {
-            WorldSwitcherMod.LOGGER.error("Failed to delete world '{}'", entry.name(), e);
-            source.sendFailure(Messages.error("Delete failed: " + e.getMessage()));
-            return 0;
-        }
-        source.sendSuccess(() -> Messages.success("World '" + entry.name() + "' deleted."), true);
-        return 1;
-    }
-
-    private static int executeDeleteCancel(CommandContext<CommandSourceStack> context) {
-        CommandSourceStack source = context.getSource();
-        boolean removed = PENDING_DELETES.remove(sourceKey(source)) != null;
-        source.sendSuccess(() -> Messages.info(removed ? "Delete cancelled." : "Nothing to cancel."), false);
-        return removed ? 1 : 0;
+        return PendingConfirmations.request(source,
+                Messages.error("Delete world '" + entry.name()
+                        + "' including ALL its data and stored inventories?"),
+                confirming -> {
+                    WorldRegistry.WorldEntry current =
+                            WorldRegistry.get(confirming.getServer()).byId(entry.id());
+                    if (current == null) {
+                        confirming.sendFailure(Messages.error("World no longer exists."));
+                        return 0;
+                    }
+                    try {
+                        DynamicDimensionManager.deleteWorld(confirming.getServer(), current);
+                    } catch (IOException e) {
+                        WorldSwitcherMod.LOGGER.error("Failed to delete world '{}'", current.name(), e);
+                        confirming.sendFailure(Messages.error("Delete failed: " + e.getMessage()));
+                        return 0;
+                    }
+                    confirming.sendSuccess(() ->
+                            Messages.success("World '" + current.name() + "' deleted."), true);
+                    return 1;
+                });
     }
 
     private static long folderSize(Path path) {

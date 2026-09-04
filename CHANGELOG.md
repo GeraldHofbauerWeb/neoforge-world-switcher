@@ -4,6 +4,73 @@ All notable changes to World Switcher will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-04
+### Added
+- **Konfigurierbare modded Player-Daten** — statt jeden Mod einzeln zu unterstützen, gibt es jetzt
+  eine generierte, kommentierte Datei `<world-save>/serverconfig/worldswitcher-playerdata.toml`.
+  Sie listet **jedes** auf dem Server gefundene Stück Spielerdaten mit besitzendem Mod und
+  Beschreibung auf, jeweils mit einem einfachen `true` (pro Welt) / `false` (global).
+  Nicht gelistete Keys sind pro Welt. Die Datei wird bei jedem Serverstart aufgefrischt:
+  Entscheidungen bleiben erhalten, Kommentare werden erneuert, neue Keys angehängt.
+  Beschreibungen kommen aus einer kuratierten Liste im Jar, dem Mod-Anzeigenamen aus der
+  ModList und einer Heuristik über die Form der gespeicherten NBT-Daten („looks like an
+  inventory (24 item stacks found)") — Attachment-Typen haben von sich aus **kein** Label,
+  das Spiel liefert nur die ID.
+- **Bridge-SPI für Mods mit eigenem Storage** — Mods, die Spielerdaten weder als NeoForge-Attachment
+  noch im Persistent-NBT ablegen, sind generisch nicht erreichbar. Erste Implementierung:
+  **Cosmetic Armor Reworked**, das seine Slots in eigene `playerdata/<uuid>.cosarmor`-Dateien
+  schreibt und deshalb bisher weltübergreifend blieb. Dependency-frei über Reflection; ohne den
+  Mod inaktiv, ohne Logspam.
+- **Echte benannte Weltengruppen** (`/wsc group list|info|set|unset`) — bisher konnte eine Welt nur
+  mit `default` teilen. Jetzt lassen sich beliebig viele Welten in eine gemeinsame Gruppe legen;
+  Welten in einer Gruppe teilen sich **einen** Spielerzustand. Das ist auch die Antwort auf
+  „Welten synchron halten": eine Gruppe statt zwei ständig abgeglichener Zustände.
+  `shareinventory` wird automatisch als Gruppe `default` migriert.
+- **Gamemode pro Welt** (`/wsc world gamemode <welt> [none|<modus> [forced]]`) — bisher behielt man
+  beim Erstbesuch einfach seinen aktuellen Modus (`PlayerSnapshot.applyFresh` fasst den Gamemode
+  bewusst nicht an). Jetzt kann eine Welt einen Modus vorgeben, in zwei Varianten: **default**
+  setzt ihn nur beim Erstbesuch der Inventargruppe, danach gilt wieder der pro Welt gemerkte Modus
+  des Spielers („das ist die Creative-Welt"); **forced** setzt ihn bei jedem Betreten
+  („hier bleibt jeder im Adventure-Modus") und greift beim Setzen sofort für alle, die schon drin
+  stehen. Durchgesetzt wird beim Betreten, nicht laufend. Ohne per-Welt-Zustand
+  (`separateInventories = false`) gibt es keinen gemerkten Modus, den ein Default setzen könnte —
+  dort wirkt nur `forced`, worauf der Befehl auch hinweist.
+- **Zugangsbeschränkte Welten** (`/wsc world access <welt> [0-4]`) — Mindest-Permission-Level pro
+  Welt, Default `0` (alle). Geprüft bei `/ws`, bei Portalen, die in die Welt führen, und beim
+  Login: wer sich in einer inzwischen gesperrten Welt einloggt, wird mit seinem Default-Zustand in
+  die Standardwelt versetzt (dieselbe Reconcile-Logik wie bei entladenen Welten). Gesperrte Welten
+  verschwinden aus der `/ws`-Tab-Completion und aus der `/ws`-Liste für Spieler ohne Zugang.
+  `/wsc player tp` umgeht die Sperre bewusst — der Befehl ist ohnehin OP-gated, und jemanden
+  hineinzusetzen ist eine bewusste Admin-Entscheidung. Beim Setzen eines Levels werden Spieler, die
+  drin stehen und es nicht haben, nach Rückfrage in die Standardwelt geholt.
+  ⚠️ Vanilla kennt keinen Befehl, um einzelne Level zu vergeben: `/op` vergibt immer
+  `op-permission-level` aus der `server.properties` (Default `4`). Auf einem Server ohne
+  Permission-Mod sind praktisch nur `0` und „≥ 1" unterscheidbar.
+- **Spielerzustand zwischen Welten übertragen** (`/wsc player state show|copy|move|swap|clear`) —
+  pro Spieler, auch offline (der Store ist UUID-basiert). Position und Dimension wandern bewusst
+  **nicht** mit; alles andere schon, inklusive des kompletten modded States. Steht der Spieler
+  online in der Zielgruppe, wird der neue Zustand sofort angewendet, ohne Relog.
+
+### Changed
+- **Cosmetic Armor ist ab sofort pro Welt getrennt** (inkl. der Flags zum Ausblenden der
+  Vanilla-Rüstung). Für das alte, globale Verhalten
+  `"cosmeticarmorreworked:cosarmor" = false` in `worldswitcher-playerdata.toml` setzen.
+- **`/wsc` ist nach Substantiven gruppiert** — `world`, `player`, `group`, `config`; `help`,
+  `confirm` und `cancel` bleiben oben. `/wsc help <thema>` zeigt die jeweilige Kategorie.
+  **Alle 13 bisherigen Pfade funktionieren weiter** als Aliase (Brigadier-Redirects auf dieselbe
+  Implementierung, keine Kopien) und weisen beim Aufruf einmal auf den Ersatz hin.
+  Entfernung frühestens in 2.0.0.
+- `attachmentExcludes` / `persistentDataExcludes` bleiben als harte „immer global"-Overrides
+  bestehen und füllen die neue Datei beim ersten Erzeugen vor. Die `swap*`-Optionen sind jetzt
+  Master-Schalter über den Per-Key-Entscheidungen: geswappt wird nur, wenn beide zustimmen.
+- Bestätigungspflichtige Aktionen laufen über einen gemeinsamen `/wsc confirm`/`/wsc cancel`-Kanal
+  (30 s Timeout), den jetzt auch Gruppenwechsel und Zustands-Transfers nutzen.
+
+### Migration
+- `worldswitcher_worlds.dat` bekommt pro Welt ein `inventoryGroup`-Feld. Alte Saves werden beim
+  Laden migriert (`shareDefaultInventory = true` → Gruppe `default`); das alte Flag wird weiterhin
+  mitgeschrieben, damit ein Downgrade auf 1.4.x die Welt weiter korrekt liest.
+
 ## [1.4.0] - 2026-07-19
 ### Added
 - **Command-Hooks** (`enableCommandHooks`, Default an): Admins können in

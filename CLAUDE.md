@@ -22,10 +22,11 @@ Guidance for AI assistants (Claude / Junie) working on this repository.
 
 - **Mod:** World Switcher (`mod_id=worldswitcher`), a **server-side-only** Multiverse-style
   world manager: switch worlds with `/ws`, manage them with `/wsc`, per-player/per-world
-  player state, per-world gamerules/time/weather/difficulty, and command hooks.
+  player state, named world groups, per-world gamerules/time/weather/difficulty, per-world
+  default/forced game mode, permission-gated worlds, and command hooks.
 - **Group:** `net.geraldhofbauer.worldswitcher` · **License:** MIT · **Author:** Gerald Hofbauer
 - **Loader / MC:** NeoForge `21.0.167`, Minecraft `1.21.1` (range `[1.21,1.21.1]`).
-- **Current version:** `1.4.0` (see `mod_version` in `gradle.properties`).
+- **Current version:** `1.5.0` (see `mod_version` in `gradle.properties`).
 - **Repo:** <https://github.com/Gerry3010/neoforge-world-switcher> (branch `main`).
 - Vanilla 1.21.1 clients can join without the mod (client unsupported / server required).
 
@@ -62,6 +63,26 @@ gameplay flows — validation is manual (via `test-server/`, NeoForge 1.21.1).
 - Always **delete the old `worldswitcher-*.jar`** before copying the new one in.
 - ⚠️ Leave the v3 instance `AMP_SebsModpackv302` untouched unless explicitly asked.
 
+## Per-world config files (per world save, under `<world-save>/serverconfig/`)
+
+- `worldswitcher-server.toml` — the NeoForge `ModConfigSpec` options (master switches).
+- `worldswitcher-hooks.json` — command hooks, see below.
+- `worldswitcher-playerdata.toml` — **generated**, per-key control over which modded player data
+  is per world (`true`) and which is global (`false`). Written from `PlayerDataCatalog`, which
+  enumerates the attachment registry, observes persistent-NBT keys and lists the registered
+  bridges. Never hand-author it from scratch: `/wsc config playerdata write` regenerates it,
+  keeping existing choices. On the customer server:
+  `/AMP/Minecraft/survival_world/serverconfig/worldswitcher-playerdata.toml`.
+
+## Adding support for a mod that stores player data itself
+
+Mods reachable via NeoForge data attachments or the persistent player NBT need **no** code — they
+are swapped generically. Only mods with their own storage need work: implement
+`player/data/PlayerDataBridge` (dependency-free reflection, `ClassNotFoundException` → silently
+off) and register it in `PlayerDataBridges.ALL`. See `bridge/CosArmorBridge` as the template, and
+add a line to `src/main/resources/data/worldswitcher/playerdata_labels.json` so the generated
+config explains it.
+
 ## Command hooks
 
 - Per world-save JSON: `<world-save>/serverconfig/worldswitcher-hooks.json`
@@ -70,7 +91,7 @@ gameplay flows — validation is manual (via `test-server/`, NeoForge 1.21.1).
 - Variables: `{{worldName}}`, `{{worldId}}`, `{{playerName}}`, `{{playerUuid}}`.
 - `as: server` (OP 4, output suppressed, positioned at the world) or `as: player`; default
   from `hookDefaultRunAs`. Global hooks run before per-world hooks. Master toggle
-  `enableCommandHooks`. Live reload/inspect via `/wsc hooks reload` and `/wsc hooks status`.
+  `enableCommandHooks`. Live reload/inspect via `/wsc config hooks reload` and `/wsc config hooks status`.
 - See `README.md` for full docs and ready-made examples (e.g. pausing
   `doDaylightCycle`/`doWeatherCycle`/`doSeasonCycle` while a world is empty).
 

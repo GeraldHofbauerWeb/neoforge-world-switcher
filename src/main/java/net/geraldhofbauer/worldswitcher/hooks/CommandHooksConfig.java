@@ -204,7 +204,7 @@ public final class CommandHooksConfig {
                 "Each hook is either a plain command string, or { \\"command\\": \\"...\\", \\"as\\": \\"server|player\\" }.",
                 "'as' overrides the global hookDefaultRunAs config option (server = OP 4, player = own perms).",
                 "'global' hooks run for every world, before the matching per-world hooks.",
-                "Reload after editing with /wsc hooks reload. This example is inert until you edit it."
+                "Reload after editing with /wsc config hooks reload. This example is inert until you edit it."
               ],
               "global": {
               },

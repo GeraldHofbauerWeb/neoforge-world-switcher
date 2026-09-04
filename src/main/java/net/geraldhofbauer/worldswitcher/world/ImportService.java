@@ -111,7 +111,7 @@ public final class ImportService {
         String id = slugify(name);
         if (!WorldRegistry.ID_PATTERN.matcher(id).matches()) {
             source.sendFailure(Messages.error("Cannot derive a valid world id from '" + name
-                    + "' — use: /wsc import \"" + sourceRelPath + "\" as <name>"));
+                    + "' — use: /wsc world import \"" + sourceRelPath + "\" as <name>"));
             return;
         }
         WorldRegistry registry = WorldRegistry.get(server);

@@ -380,7 +380,7 @@ public final class GameRuleHelper {
         }
     }
 
-    /** Explicit world targeting: {@code /wsc difficulty <world> [value]}. */
+    /** Explicit world targeting: {@code /wsc world difficulty <world> [value]}. */
     public static LiteralArgumentBuilder<CommandSourceStack> buildWscDifficultyNode() {
         RequiredArgumentBuilder<CommandSourceStack, String> worldArg =
                 Commands.argument("world", StringArgumentType.word())
@@ -419,7 +419,7 @@ public final class GameRuleHelper {
         ServerLevel level = source.getServer().getLevel(entry.dimensionKey());
         if (level == null) {
             source.sendFailure(Messages.error("World '" + entry.name() + "' is unloaded — run ")
-                    .append(Messages.runCommand("/wsc load " + entry.name(), "/wsc load " + entry.name(),
+                    .append(Messages.runCommand("/wsc world load " + entry.name(), "/wsc world load " + entry.name(),
                             ChatFormatting.YELLOW))
                     .append(Messages.error(" first.")));
             return null;
@@ -427,7 +427,7 @@ public final class GameRuleHelper {
         return level;
     }
 
-    // ------------------------------------------------------------------ /wsc gamerule <world> …
+    // ------------------------------------------------------------------ /wsc world gamerule <world> …
 
     /** Explicit world targeting from anywhere: query, set, or list overrides of a world. */
     public static LiteralArgumentBuilder<CommandSourceStack> buildWscGameruleNode() {
@@ -464,7 +464,7 @@ public final class GameRuleHelper {
         ServerLevel level = source.getServer().getLevel(entry.dimensionKey());
         if (level == null) {
             source.sendFailure(Messages.error("World '" + entry.name() + "' is unloaded — run ")
-                    .append(Messages.runCommand("/wsc load " + entry.name(), "/wsc load " + entry.name(),
+                    .append(Messages.runCommand("/wsc world load " + entry.name(), "/wsc world load " + entry.name(),
                             ChatFormatting.YELLOW))
                     .append(Messages.error(" first.")));
             return null;
@@ -500,7 +500,7 @@ public final class GameRuleHelper {
         return rule.getCommandResult();
     }
 
-    /** Bare {@code /wsc gamerule <world>}: rules that differ from the global (default) values. */
+    /** Bare {@code /wsc world gamerule <world>}: rules that differ from the global (default) values. */
     private static int listWorldRules(CommandContext<CommandSourceStack> context) {
         ServerLevel level = resolveWorldTarget(context);
         if (level == null) {
@@ -520,7 +520,7 @@ public final class GameRuleHelper {
                 if (!worldValue.equals(globalValue)) {
                     lines.add(Component.literal("  ")
                             .append(Messages.suggestCommand(key.getId(),
-                                    "/wsc gamerule " + world + " " + key.getId() + " ", ChatFormatting.AQUA))
+                                    "/wsc world gamerule " + world + " " + key.getId() + " ", ChatFormatting.AQUA))
                             .append(Component.literal(" = " + worldValue).withStyle(ChatFormatting.WHITE))
                             .append(Messages.info("  (default world: " + globalValue + ")")));
                 }

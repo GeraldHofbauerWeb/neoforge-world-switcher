@@ -6,7 +6,11 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.serialization.Codec;
 import net.geraldhofbauer.worldswitcher.WorldSwitcherMod;
+import net.geraldhofbauer.worldswitcher.player.data.PlayerDataBridge;
+import net.geraldhofbauer.worldswitcher.player.data.PlayerDataBridges;
 import net.geraldhofbauer.worldswitcher.util.Messages;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.server.level.ServerPlayer;
@@ -20,10 +24,14 @@ import java.util.function.Supplier;
 
 /**
  * Test-only hook, active ONLY with {@code -Dworldswitcher.e2e=true}: registers a serializable
- * marker attachment and a {@code /wsc debug} subcommand so the per-world attachment and
- * persistent-data swap can be exercised end-to-end by a vanilla-protocol test client (mods like
- * Curios register mandatory network payloads and would reject it). The attachment-type registry
- * is not synced to clients, so vanilla clients still join.
+ * marker attachment and a {@code /wsc debug} subcommand so the per-world attachment, persistent-data
+ * and bridge swaps can be exercised end-to-end by a vanilla-protocol test client (mods like Curios
+ * register mandatory network payloads and would reject it). The attachment-type registry is not
+ * synced to clients, so vanilla clients still join.
+ *
+ * <p>{@code /wsc debug bridge get|set} reads and writes a {@link PlayerDataBridge}'s state as SNBT,
+ * which makes a mod's own storage — Cosmetic Armor's slots, say — scriptable from the server console
+ * without any client interaction.</p>
  */
 public final class E2eTestHook {
 
@@ -65,7 +73,60 @@ public final class E2eTestHook {
                                                 .executes(E2eTestHook::pdataSet))))
                         .then(Commands.literal("get")
                                 .then(Commands.argument("key", StringArgumentType.word())
-                                        .executes(E2eTestHook::pdataGet))));
+                                        .executes(E2eTestHook::pdataGet))))
+                .then(Commands.literal("bridge")
+                        .then(Commands.literal("list")
+                                .executes(E2eTestHook::bridgeList))
+                        .then(Commands.literal("get")
+                                .then(Commands.argument("id", StringArgumentType.string())
+                                        .executes(E2eTestHook::bridgeGet)))
+                        .then(Commands.literal("set")
+                                .then(Commands.argument("id", StringArgumentType.string())
+                                        .then(Commands.argument("nbt", StringArgumentType.greedyString())
+                                                .executes(E2eTestHook::bridgeSet)))));
+    }
+
+    private static int bridgeList(CommandContext<CommandSourceStack> context) {
+        for (PlayerDataBridge bridge : PlayerDataBridges.all()) {
+            context.getSource().sendSuccess(() -> Messages.info("e2e bridge " + bridge.id()
+                    + " available=" + bridge.available()), false);
+        }
+        return PlayerDataBridges.all().size();
+    }
+
+    @Nullable
+    private static PlayerDataBridge bridge(CommandContext<CommandSourceStack> context) {
+        String id = StringArgumentType.getString(context, "id");
+        PlayerDataBridge bridge = PlayerDataBridges.byId(id);
+        if (bridge == null || !bridge.available()) {
+            context.getSource().sendFailure(Messages.error("e2e bridge " + id + " unavailable"));
+        }
+        return bridge != null && bridge.available() ? bridge : null;
+    }
+
+    private static int bridgeGet(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        PlayerDataBridge bridge = bridge(context);
+        if (bridge == null) {
+            return 0;
+        }
+        CompoundTag captured = bridge.capture(player);
+        context.getSource().sendSuccess(() -> Messages.info("e2e bridge " + bridge.id() + " = "
+                + (captured == null ? "<absent>" : captured.toString())), false);
+        return 1;
+    }
+
+    private static int bridgeSet(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        ServerPlayer player = context.getSource().getPlayerOrException();
+        PlayerDataBridge bridge = bridge(context);
+        if (bridge == null) {
+            return 0;
+        }
+        String snbt = StringArgumentType.getString(context, "nbt");
+        bridge.apply(player, "clear".equals(snbt) ? null : TagParser.parseTag(snbt));
+        context.getSource().sendSuccess(() -> Messages.info("e2e bridge " + bridge.id() + " applied"),
+                false);
+        return 1;
     }
 
     private static int attachmentSet(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {

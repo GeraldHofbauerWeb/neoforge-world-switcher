@@ -28,7 +28,7 @@ public final class WsCommand {
                 .requires(source -> source.hasPermission(Config.wsPermissionLevel()))
                 .executes(WsCommand::executeList)
                 .then(Commands.argument("world", StringArgumentType.word())
-                        .suggests(WorldSuggestions.SWITCH_TARGETS)
+                        .suggests(WorldSuggestions.ACCESSIBLE_WORLDS)
                         .executes(WsCommand::executeSwitch)));
     }
 
@@ -47,7 +47,11 @@ public final class WsCommand {
             defaultLine.append(Messages.info("  (you are here)"));
         }
         source.sendSuccess(() -> defaultLine, false);
+        ServerPlayer viewer = source.getEntity() instanceof ServerPlayer player ? player : null;
         for (WorldRegistry.WorldEntry entry : entries) {
+            if (viewer != null && !WorldRegistry.mayEnter(viewer, entry)) {
+                continue;
+            }
             var line = net.minecraft.network.chat.Component.literal("  ")
                     .append(Messages.runCommand(entry.name(), "/ws " + entry.name(),
                             net.minecraft.ChatFormatting.AQUA));
@@ -66,11 +70,18 @@ public final class WsCommand {
         CommandSourceStack source = context.getSource();
         ServerPlayer player = source.getPlayerOrException();
         String worldName = StringArgumentType.getString(context, "world");
-        return switchToWorld(source, player, worldName);
+        return switchToWorld(source, player, worldName, true);
     }
 
-    /** Shared by /ws and /wsc tp. Returns the command result (1 = success). */
-    static int switchToWorld(CommandSourceStack source, ServerPlayer player, String worldName) {
+    /**
+     * Shared by /ws and /wsc player tp. Returns the command result (1 = success).
+     *
+     * @param enforceAccess whether the world's required permission level applies — true for
+     *                      {@code /ws}, false for {@code /wsc player tp}, which is an OP-gated
+     *                      admin action and may put a player anywhere
+     */
+    static int switchToWorld(CommandSourceStack source, ServerPlayer player, String worldName,
+                             boolean enforceAccess) {
         MinecraftServer server = source.getServer();
         String currentGroup = WorldRegistry.groupOf(player.level().dimension());
 
@@ -92,8 +103,13 @@ public final class WsCommand {
         }
         if (entry.unloaded()) {
             source.sendFailure(Messages.error("World '" + entry.name() + "' is unloaded — ask an admin to run ")
-                    .append(Messages.runCommand("/wsc load " + entry.name(), "/wsc load " + entry.name(),
+                    .append(Messages.runCommand("/wsc world load " + entry.name(), "/wsc world load " + entry.name(),
                             net.minecraft.ChatFormatting.YELLOW)));
+            return 0;
+        }
+        if (enforceAccess && !WorldRegistry.mayEnter(player, entry)) {
+            source.sendFailure(Messages.error("You do not have permission to enter world '"
+                    + entry.name() + "'."));
             return 0;
         }
         if (entry.id().equals(currentGroup)) {

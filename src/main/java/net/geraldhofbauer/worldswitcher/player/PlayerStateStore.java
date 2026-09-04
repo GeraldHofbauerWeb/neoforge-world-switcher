@@ -83,6 +83,32 @@ public class PlayerStateStore extends SavedData {
         setDirty();
     }
 
+    /** Drops one player's snapshot for a group. Returns true if there was one. */
+    public boolean removeSnapshot(UUID player, String group) {
+        PlayerRecord record = players.get(player);
+        if (record == null || record.snapshots.remove(group) == null) {
+            return false;
+        }
+        setDirty();
+        return true;
+    }
+
+    /** The groups this player has a stored snapshot for, sorted for stable command output. */
+    public java.util.List<String> groupsFor(UUID player) {
+        PlayerRecord record = players.get(player);
+        if (record == null) {
+            return java.util.List.of();
+        }
+        java.util.List<String> groups = new java.util.ArrayList<>(record.snapshots.keySet());
+        java.util.Collections.sort(groups);
+        return groups;
+    }
+
+    /** Every player the store has ever tracked — including offline ones. */
+    public java.util.Set<UUID> knownPlayers() {
+        return java.util.Set.copyOf(players.keySet());
+    }
+
     /** Drops all stored snapshots of a deleted world group. */
     public void removeGroup(String group) {
         boolean changed = false;
