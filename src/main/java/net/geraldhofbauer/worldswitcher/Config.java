@@ -35,6 +35,15 @@ public final class Config {
                     "restores the mode you last had there (first visit keeps the current one).")
             .define("swapGamemode", true);
 
+    private static final ModConfigSpec.BooleanValue PER_WORLD_RESPAWN_POINT = BUILDER
+            .comment("Include the respawn point (bed / respawn anchor) in the per-world player",
+                    "state: each world group remembers its own bed, and dying in a world without",
+                    "one respawns you at that world's spawn instead of the overworld. If false,",
+                    "there is one global respawn point, so dying anywhere sends you to the last",
+                    "bed you slept in, wherever that was. Only active when separateInventories",
+                    "is on.")
+            .define("perWorldRespawnPoint", true);
+
     private static final ModConfigSpec.BooleanValue HANDLE_PORTAL_GROUP_CHANGES = BUILDER
             .comment("If a portal or another mod teleports a player across world groups",
                     "(e.g. a nether portal inside an imported world), swap the player state",
@@ -144,6 +153,10 @@ public final class Config {
 
     public static boolean swapGamemode() {
         return SWAP_GAMEMODE.get();
+    }
+
+    public static boolean perWorldRespawnPoint() {
+        return PER_WORLD_RESPAWN_POINT.get();
     }
 
     public static boolean handlePortalGroupChanges() {

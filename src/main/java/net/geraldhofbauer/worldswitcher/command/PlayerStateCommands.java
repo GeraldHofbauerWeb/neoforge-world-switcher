@@ -27,11 +27,12 @@ import java.util.UUID;
 /**
  * {@code /wsc player state …} — moving one player's stored per-world state between worlds.
  *
- * <p>Position and dimension never travel: a snapshot's coordinates belong to the world it was taken
- * in, and {@code restoreLastPosition} would otherwise drop the player into the wrong place. The
- * target keeps whatever position it already had, or falls back to its spawn. Everything else moves,
- * including the full modded state — Curios, persistent NBT, bridges such as Cosmetic Armor, and
- * Tough As Nails.</p>
+ * <p>Position, dimension and the remembered respawn point never travel: they belong to the world
+ * the snapshot was taken in, and {@code restoreLastPosition} would otherwise drop the player into
+ * the wrong place — a transferred bed would even pull them out of the world on their next death.
+ * The target keeps whatever position and bed it already had, or falls back to its spawn. Everything
+ * else moves, including the full modded state — Curios, persistent NBT, bridges such as Cosmetic
+ * Armor, and Tough As Nails.</p>
  *
  * <p>Offline players work as well, because the store is keyed by UUID. When the player happens to be
  * online in the group being written, the new state is also applied to them live — writing only the
@@ -40,8 +41,13 @@ import java.util.UUID;
 public final class PlayerStateCommands {
 
     /** Keys that describe where a snapshot was taken — never carried across a transfer. */
-    private static final List<String> POSITION_KEYS =
-            List.of("dimension", "posX", "posY", "posZ", "yaw", "pitch");
+    /**
+     * Snapshot keys that belong to the world the snapshot was taken in, not to the state itself:
+     * the last position and the remembered bed/respawn anchor. They stay behind on a transfer.
+     */
+    private static final List<String> WORLD_BOUND_KEYS =
+            List.of("dimension", "posX", "posY", "posZ", "yaw", "pitch",
+                    "respawnDimension", "respawnX", "respawnY", "respawnZ", "respawnAngle", "respawnForced");
 
     /** Online players plus everyone the state store has ever seen. */
     public static final SuggestionProvider<CommandSourceStack> KNOWN_PLAYERS = (context, builder) -> {
@@ -187,7 +193,7 @@ public final class PlayerStateCommands {
                 return 0;
             }
             store.putSnapshot(target.uuid(), toGroup,
-                    withPositionOf(stored, store.getSnapshot(target.uuid(), toGroup)));
+                    withPlaceOf(stored, store.getSnapshot(target.uuid(), toGroup)));
             if (move) {
                 store.removeSnapshot(target.uuid(), fromGroup);
             }
@@ -237,12 +243,12 @@ public final class PlayerStateCommands {
             CompoundTag a = store.getSnapshot(target.uuid(), groupA);
             CompoundTag b = store.getSnapshot(target.uuid(), groupB);
             if (b != null) {
-                store.putSnapshot(target.uuid(), groupA, withPositionOf(b, a));
+                store.putSnapshot(target.uuid(), groupA, withPlaceOf(b, a));
             } else {
                 store.removeSnapshot(target.uuid(), groupA);
             }
             if (a != null) {
-                store.putSnapshot(target.uuid(), groupB, withPositionOf(a, b));
+                store.putSnapshot(target.uuid(), groupB, withPlaceOf(a, b));
             } else {
                 store.removeSnapshot(target.uuid(), groupB);
             }
@@ -290,12 +296,12 @@ public final class PlayerStateCommands {
     // ------------------------------------------------------------------ helpers
 
     /**
-     * The transferred state, with the position of whatever the destination already had — or no
-     * position at all, which makes the player arrive at the world spawn.
+     * The transferred state, with the position and respawn point of whatever the destination already
+     * had — or neither, which makes the player arrive at, and respawn at, the world spawn.
      */
-    private static CompoundTag withPositionOf(CompoundTag state, @Nullable CompoundTag destination) {
+    private static CompoundTag withPlaceOf(CompoundTag state, @Nullable CompoundTag destination) {
         CompoundTag copy = state.copy();
-        for (String key : POSITION_KEYS) {
+        for (String key : WORLD_BOUND_KEYS) {
             copy.remove(key);
             if (destination != null && destination.contains(key)) {
                 copy.put(key, destination.get(key).copy());

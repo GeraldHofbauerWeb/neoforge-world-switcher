@@ -14,11 +14,14 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.portal.DimensionTransition;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.EntityTravelToDimensionEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.entity.player.PlayerRespawnPositionEvent;
 
 import javax.annotation.Nullable;
 import java.util.HashMap;
@@ -239,6 +242,41 @@ public final class PlayerStateManager {
                 teleportGuarded(player, server.overworld(), spawn.getX() + 0.5, spawn.getY(),
                         spawn.getZ() + 0.5, 0.0F, 0.0F);
             }
+        }
+
+        /**
+         * Where a death respawn lands. Vanilla knows exactly one respawn point per player and
+         * falls back to the OVERWORLD spawn whenever it cannot be used — both of which drag the
+         * player out of the world they died in. With per-world respawn points the live bed always
+         * belongs to the group the player is standing in, so a respawn that would land in another
+         * group is the fallback talking: send them to the spawn of the world they died in instead
+         * (the vanilla dimensions keep respawning in the overworld, they are one group). The
+         * "no respawn block" flag is carried over, so the client still explains why the bed did
+         * not work.
+         */
+        @SubscribeEvent
+        public void onRespawnPosition(PlayerRespawnPositionEvent event) {
+            if (!(event.getEntity() instanceof ServerPlayer player)
+                    || event.isFromEndFight()
+                    || !Config.separateInventories()
+                    || !Config.perWorldRespawnPoint()) {
+                return;
+            }
+            MinecraftServer server = player.server;
+            // The dead player was already removed from its level, but still points at it.
+            ServerLevel deathLevel = player.serverLevel();
+            DimensionTransition transition = event.getDimensionTransition();
+            String deathGroup = WorldRegistry.inventoryGroupOf(server, deathLevel.dimension());
+            if (WorldRegistry.inventoryGroupOf(server, transition.newLevel().dimension()).equals(deathGroup)) {
+                return; // their bed is in this group (possibly another of its worlds) — vanilla is right
+            }
+            ServerLevel target = WorldRegistry.DEFAULT_GROUP.equals(WorldRegistry.groupOf(deathLevel.dimension()))
+                    ? server.overworld() : deathLevel;
+            BlockPos spawn = targetSpawn(server, target);
+            event.setDimensionTransition(new DimensionTransition(target,
+                    new Vec3(spawn.getX() + 0.5, spawn.getY(), spawn.getZ() + 0.5), Vec3.ZERO,
+                    targetSpawnAngle(server, target), 0.0F, transition.missingRespawnBlock(),
+                    transition.postDimensionTransition()));
         }
 
         /**

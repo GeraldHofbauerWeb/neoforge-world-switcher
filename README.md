@@ -191,9 +191,22 @@ Stop the source server before importing a live world (a fresh `session.lock` tri
 ## Per-world player state
 
 With `separateInventories = true` (default), each world keeps its own player state per player:
-inventory, ender chest, XP, health, hunger, potion effects, game mode and last position. The
-vanilla dimensions count as one group `default`. First visit to a world = fresh start at its
-spawn.
+inventory, ender chest, XP, health, hunger, potion effects, game mode, respawn point and last
+position. The vanilla dimensions count as one group `default`. First visit to a world = fresh start
+at its spawn.
+
+### Respawning (`perWorldRespawnPoint`)
+
+The bed or respawn anchor you slept in is part of that world's state, so every world remembers its
+own. Dying sends you back to the bed **of the world you died in**, not to the last bed you happened
+to sleep in somewhere else. Without a bed in the current world you respawn at that world's own
+spawn (taken from its `level.dat` on import, or computed on first load) instead of being dropped
+into the overworld.
+
+Worlds in the same group share one bed, exactly like they share one inventory; the vanilla
+dimensions are one such group, so a death in the nether still returns you to your overworld bed.
+Set `perWorldRespawnPoint = false` for the vanilla behaviour: one global respawn point for all
+worlds.
 
 ### World groups (shared inventories, "auto-sync")
 
@@ -273,21 +286,21 @@ after regrouping worlds, or when someone left their gear in the wrong place:
 /wsc player state copy Steve default skyblock
 ```
 
-Offline players work too; the store is keyed by UUID. **Position and dimension never travel** —
-the target keeps its own last position, or its spawn if it has none. Everything else does,
+Offline players work too; the store is keyed by UUID. **Position, dimension and the remembered
+respawn point never travel** — the target keeps its own last position and bed, or its spawn if it
+has neither. Everything else does,
 including the full modded state (Curios, persistent NBT, bridges such as Cosmetic Armor, Tough As
 Nails). If the player happens to be online in the group being written, the new state is applied to
 them immediately, without a relog.
 
 Handled edge cases:
 
-Handled edge cases:
-
 - **Nether portals inside the default group** don't swap anything.
 - **Portals that cross world groups** (e.g. a nether portal built in an imported world) swap the
   state like `/ws` would (`handlePortalGroupChanges`; set to `false` to block such travel).
-- **Death in world X without a bed there** respawns you in the default world with your default
-  state; world X keeps the post-death state (your items drop at the death spot as usual).
+- **Death in world X without a bed there** respawns you at world X's spawn, with world X's state
+  (your items drop at the death spot as usual). With `perWorldRespawnPoint = false` you land in the
+  default world with your default state instead, the way it worked before 1.5.2.
 - **World deleted/unloaded while you were offline in it**: on login you're reconciled into the
   overworld with your default state.
 
@@ -398,6 +411,7 @@ add `gamerule doSeasonCycle false` / `true` next to the others:
 | `autoLoadOnStartup` | `true` | Re-load registered worlds at server start |
 | `restoreLastPosition` | `true` | `/ws` returns you to your last position in that world |
 | `swapGamemode` | `true` | Game mode is part of the per-world state (first visit keeps the current one) |
+| `perWorldRespawnPoint` | `true` | Bed/respawn anchor is part of the per-world state; dying without one respawns you at that world's spawn |
 | `handlePortalGroupChanges` | `true` | Swap state on cross-group portal travel (else cancel it) |
 | `importCopyAsync` | `true` | Copy imports on a background thread |
 | `perWorldGameRules` | `true` | Each world keeps its own game rules |

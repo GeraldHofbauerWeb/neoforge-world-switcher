@@ -4,6 +4,29 @@ All notable changes to World Switcher will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-09-18
+### Added
+- **Respawn-Punkt pro Welt** (`perWorldRespawnPoint`, standardmäßig an). Das Bett bzw. der
+  Respawn-Anker gehört jetzt zum Weltzustand wie das Inventar: Jede Welt merkt sich ihr eigenes.
+  Bisher gab es genau **einen** globalen Respawn-Punkt — wer in Welt A geschlafen hatte und in
+  Welt B starb, wurde aus B herausgerissen und landete in A; ohne Bett schickte Vanilla ihn
+  ersatzweise immer in die **Overworld**. Beides ist behoben:
+  - Der gespeicherte Respawn-Punkt wandert beim Weltwechsel mit dem restlichen Zustand mit.
+  - Ein Tod ohne Bett in der aktuellen Welt führt zum **Spawn dieser Welt**, nicht in die Overworld.
+    Die „Kein Respawn-Block"-Meldung bleibt erhalten, damit der Client weiterhin erklärt, warum das
+    Bett nicht funktioniert hat.
+  - Welten in derselben Gruppe teilen sich ein Bett, genau wie sie sich ein Inventar teilen — die
+    Vanilla-Dimensionen sind so eine Gruppe, ein Tod im Nether führt also weiterhin zum
+    Overworld-Bett.
+  - `perWorldRespawnPoint = false` stellt das Vanilla-Verhalten wieder her (ein globaler
+    Respawn-Punkt). Ohne per-Welt-Zustand (`separateInventories = false`) gibt es nichts zu
+    speichern, dort ist die Option wirkungslos.
+
+### Changed
+- `/wsc player state copy|move|swap` lässt den Respawn-Punkt in seiner Welt zurück, so wie schon
+  Position und Dimension. Ein mitgewandertes Bett hätte den Spieler beim nächsten Tod aus der Welt
+  gezogen, in die sein Zustand gerade verschoben wurde.
+
 ## [1.5.1] - 2026-09-04
 ### Fixed
 - **`default` wird in `/wsc world …` akzeptiert, wo es sinnvoll ist.** `default` ist der Name der

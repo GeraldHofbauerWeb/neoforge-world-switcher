@@ -1,18 +1,23 @@
 package net.geraldhofbauer.worldswitcher.player;
 
 import net.geraldhofbauer.worldswitcher.Config;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.protocol.game.ClientboundSetCarriedItemPacket;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
 
 /**
  * Pure NBT capture/apply of the per-world player state: inventory (incl. armor/offhand/selected
  * slot), ender chest, XP, health, food, effects, fire/air/fall state, last position and optionally
- * game mode. Position is informational — teleporting is the caller's job.
+ * game mode and respawn point. Position is informational — teleporting is the caller's job.
  */
 public final class PlayerSnapshot {
 
@@ -45,6 +50,18 @@ public final class PlayerSnapshot {
         tag.putInt("fire", player.getRemainingFireTicks());
         tag.putInt("air", player.getAirSupply());
         tag.putInt("gamemode", player.gameMode.getGameModeForPlayer().getId());
+
+        // Respawn point: always captured, applied only when perWorldRespawnPoint is on, so
+        // turning the option on later finds the beds of worlds visited before it.
+        BlockPos respawn = player.getRespawnPosition();
+        if (respawn != null) {
+            tag.putString("respawnDimension", player.getRespawnDimension().location().toString());
+            tag.putInt("respawnX", respawn.getX());
+            tag.putInt("respawnY", respawn.getY());
+            tag.putInt("respawnZ", respawn.getZ());
+            tag.putFloat("respawnAngle", player.getRespawnAngle());
+            tag.putBoolean("respawnForced", player.isRespawnForced());
+        }
 
         tag.putString("dimension", player.level().dimension().location().toString());
         tag.putDouble("posX", player.getX());
@@ -89,6 +106,9 @@ public final class PlayerSnapshot {
         if (Config.swapGamemode() && tag.contains("gamemode")) {
             player.setGameMode(GameType.byId(tag.getInt("gamemode")));
         }
+        if (Config.perWorldRespawnPoint()) {
+            applyRespawnPoint(player, tag);
+        }
 
         sync(player);
     }
@@ -114,8 +134,35 @@ public final class PlayerSnapshot {
         player.fallDistance = 0.0F;
         player.setRemainingFireTicks(0);
         player.setAirSupply(player.getMaxAirSupply());
+        if (Config.perWorldRespawnPoint()) {
+            clearRespawnPoint(player);
+        }
 
         sync(player);
+    }
+
+    /**
+     * Restores the group's own bed/anchor, or clears the respawn point when the group has none —
+     * a snapshot without respawn keys means "no bed here", which includes snapshots written
+     * before the respawn point became part of the state.
+     */
+    private static void applyRespawnPoint(ServerPlayer player, CompoundTag tag) {
+        if (!tag.contains("respawnX")) {
+            clearRespawnPoint(player);
+            return;
+        }
+        ResourceLocation dimension = ResourceLocation.tryParse(tag.getString("respawnDimension"));
+        if (dimension == null) {
+            clearRespawnPoint(player);
+            return;
+        }
+        player.setRespawnPosition(ResourceKey.create(Registries.DIMENSION, dimension),
+                new BlockPos(tag.getInt("respawnX"), tag.getInt("respawnY"), tag.getInt("respawnZ")),
+                tag.getFloat("respawnAngle"), tag.getBoolean("respawnForced"), false);
+    }
+
+    private static void clearRespawnPoint(ServerPlayer player) {
+        player.setRespawnPosition(Level.OVERWORLD, null, 0.0F, false, false);
     }
 
     private static void sync(ServerPlayer player) {
